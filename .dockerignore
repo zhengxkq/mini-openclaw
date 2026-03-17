@@ -1,0 +1,9 @@
+node_modules
+client/node_modules
+client/dist
+.env.local
+.env.*.local
+*.log
+.git
+.gitignore
+README.md

@@ -1,0 +1,40 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/data
+      - MODEL=${MODEL}
+      - BASE_URL=${BASE_URL}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_ALLOWED_USER_IDS=${TELEGRAM_ALLOWED_USER_IDS}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - HTTP_PORT=3000
+    volumes:
+      - openclaw-data:/data
+    networks:
+      - openclaw
+    # 不对外暴露端口，只在容器内网通信
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"       # 对外暴露 80 端口
+    depends_on:
+      - backend
+    networks:
+      - openclaw
+
+volumes:
+  openclaw-data:    # 后端数据持久化
+
+networks:
+  openclaw:
+    driver: bridge

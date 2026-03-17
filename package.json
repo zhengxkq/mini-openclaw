@@ -1,0 +1,26 @@
+{
+  "name": "my-openclaw",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev":   "dotenv -e .env -e .env.development -e .env.local -- node src/gateway/index.js",
+    "start": "dotenv -e .env -e .env.production -- node src/gateway/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@tavily/core": "^0.7.2",
+    "dotenv": "^17.3.1",
+    "fastify": "^5.8.2",
+    "https-proxy-agent": "^7.0.6",
+    "node-telegram-bot-api": "^0.67.0",
+    "openai": "^6.27.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^11.0.0"
+  }
+}
