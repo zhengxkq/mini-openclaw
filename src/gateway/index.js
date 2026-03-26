@@ -35,7 +35,6 @@ export class Gateway {
 
     ensureDataDirs(); // 启动时确保所有目录存在
     this.#agentDir = paths.agentDir();
-    
     fs.mkdirSync(this.#agentDir, { recursive: true });
     console.log("🦞 Gateway 初始化完成");
   }
@@ -83,8 +82,8 @@ export class Gateway {
       // );
 
       try {
-        // ── 记忆压缩 ──────────────────────────────────────
         const spanMemory = tracer.startSpan("memory_compress");
+        // ── 记忆压缩 ──────────────────────────────────────
         session.messages = await this.#memoryManager.compressIfNeeded(session.messages);
         tracer.endSpan(spanMemory);
 
@@ -105,8 +104,10 @@ export class Gateway {
         // 发送「正在输入」状态
         sourceChannel?.sendTyping?.(msg.sessionId);
 
-        // 流式推送器：攒够内容或超时就发一次
+        
         const isHttp = msg.channelName === "http";
+        
+        // 流式推送器：攒够内容或超时就发一次
         let pusher;
 
         if (isHttp) {

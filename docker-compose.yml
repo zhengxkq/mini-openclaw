@@ -27,6 +27,9 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"       # 对外暴露 80 端口
+      - "443:443"
+    volumes:
+      - /app/my-openclaw/ssl:/etc/nginx/ssl:ro  # ← 加这行，只读挂载
     depends_on:
       - backend
     networks:
