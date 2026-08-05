@@ -20,6 +20,9 @@ export const toolPermissions = {
   list_reminders: [Permission.REMINDER],
   get_cost_summary: [],  // 不需要特殊权限
   web_search: [Permission.NETWORK],
+  add_behavior_rule:    [], 
+  remove_behavior_rule: [],
+  list_behavior_rules:  [],
 };
 
 // 默认允许的权限（安全的操作）

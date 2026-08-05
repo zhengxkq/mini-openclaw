@@ -1,9 +1,10 @@
 import { ReminderStore } from "./reminder-store.js";
 import { costTracker } from "../observability/cost-tracker.js";
 import { tavily } from "@tavily/core";
-
+import { ProceduralMemory } from "./procedural-memory.js";
 
 const reminderStore = new ReminderStore();
+const proceduralMemory = new ProceduralMemory();
 // src/agent/tools.js
 // 工具定义 + 工具实现，统一管理
 // 以后每加一个新工具，只需要改这一个文件
@@ -129,6 +130,52 @@ export const toolDefinitions = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_behavior_rule",
+      description: "添加一条新的行为规则。当用户表达了对回复风格、格式、语言等方面的偏好时使用。例如用户说「以后不要用emoji」「回复用英文」「代码要加注释」",
+      parameters: {
+        type: "object",
+        properties: {
+          rule: {
+            type: "string",
+            description: "要添加的规则，简洁明确，例如：回复不使用 emoji"
+          }
+        },
+        required: ["rule"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_behavior_rule",
+      description: "删除一条已有的行为规则。当用户说「不用遵守之前说的xxx」时使用",
+      parameters: {
+        type: "object",
+        properties: {
+          rule_fragment: {
+            type: "string",
+            description: "要删除的规则的关键词片段"
+          }
+        },
+        required: ["rule_fragment"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_behavior_rules",
+      description: "列出当前所有用户自定义的行为规则",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
   }
 ];
 
@@ -235,6 +282,30 @@ const toolImplementations = {
     } catch (e) {
       return JSON.stringify({ error: `搜索失败: ${e.message}` });
     }
+  },
+  add_behavior_rule({ rule }) {
+    const success = proceduralMemory.addRule(rule);
+    return JSON.stringify({
+      success,
+      message: success ? `规则已添加: ${rule}` : "规则已存在，无需重复添加"
+    });
+  },
+
+  remove_behavior_rule({ rule_fragment }) {
+    const success = proceduralMemory.removeRule(rule_fragment);
+    return JSON.stringify({
+      success,
+      message: success ? `规则已删除` : "未找到匹配的规则"
+    });
+  },
+
+  list_behavior_rules() {
+    const rules = proceduralMemory.listUserRules();
+    return JSON.stringify({
+      rules,
+      count: rules.length,
+      message: rules.length > 0 ? `当前有 ${rules.length} 条自定义规则` : "暂无自定义规则"
+    });
   }
 };
 

@@ -16,6 +16,8 @@ import { Tracer, generateTraceId } from "../observability/tracer.js";
 import { costTracker } from "../observability/cost-tracker.js";
 import { createLogger } from "../observability/logger.js";
 import { paths, ensureDataDirs } from "../config/paths.js";
+import { EpisodicMemory } from "../agent/episodic-memory.js";
+import { ProceduralMemory } from "../agent/procedural-memory.js";
 const logger = createLogger('Gateway');
 
 export class Gateway {
@@ -26,12 +28,17 @@ export class Gateway {
   #heartbeat;
   #agentDir;
   #sandbox;
+  #episodicMemory;
+  #proceduralMemory;
+
 
   constructor() {
     this.#sessionManager = new SessionManager();
     this.#memoryManager = new MemoryManager();
     this.#reminderStore = new ReminderStore();
     this.#sandbox = new Sandbox();
+    this.#episodicMemory = new EpisodicMemory();
+    this.#proceduralMemory = new ProceduralMemory();
 
     ensureDataDirs(); // 启动时确保所有目录存在
     this.#agentDir = paths.agentDir();
@@ -90,10 +97,18 @@ export class Gateway {
         // 读取 soul.md（压缩后可能已更新，重新读）
         const soulContent = this.#memoryManager.readSoul();
 
+        // ── 检索相关历史记忆 ─────────────────────────────────
+        const spanEpisodic = tracer.startSpan("episodic_recall");
+        const relatedEpisodes = await this.#episodicMemory.recall(msg.text);
+        const episodicContent = this.#episodicMemory.formatForPrompt(relatedEpisodes);
+        const proceduralContent = this.#proceduralMemory.formatForPrompt();
+
+        tracer.endSpan(spanEpisodic, { found: relatedEpisodes.length });
+
         // 构建本次对话的 messages
         // session.messages 保存历史，每次都带上
         const messages = [
-          { role: "system", content: buildSystemPrompt(soulContent, msg.sessionId) },
+          { role: "system", content: buildSystemPrompt(soulContent, msg.sessionId, episodicContent, proceduralContent) },
           ...session.messages,
           { role: "user", content: msg.text }
         ];
@@ -191,6 +206,12 @@ export class Gateway {
           type: "agent_reply",
           content: reply
         });
+
+        // ← 放在这里，agent_reply 记录完之后
+        this.#episodicMemory.ingest(msg.sessionId, [
+          { role: "user", content: msg.text },
+          { role: "assistant", content: reply }
+        ]).catch(e => console.error("[EpisodicMemory] 提取失败:", e.message));
 
         // ── 费用检查 ──────────────────────────────────────
         const budget = costTracker.checkBudget(10);

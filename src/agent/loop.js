@@ -135,7 +135,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
   return "";
 }
 
-export function buildSystemPrompt(soulContent = "", sessionId = "") {
+export function buildSystemPrompt(soulContent = "", sessionId = "", episodicContent = "", proceduralContent = "") {
   const skillsContent = skillsLoader.load();
   // 生成北京时间字符串
   const now = new Date().toLocaleString("zh-CN", {
@@ -163,15 +163,20 @@ export function buildSystemPrompt(soulContent = "", sessionId = "") {
 
 ${sessionId ? `## 当前会话信息\n- 当前用户的 session_id 是：${sessionId}\n- 设置提醒时必须使用这个 session_id，不能用其他值` : ""}
 
+${proceduralContent}
 
 ${soulContent ? `## 关于你的记忆\n${soulContent}` : ""}
+
+${episodicContent}
 
 ${skillsContent}
 
 ## 工具使用原则
 - 需要实时数据时主动调用工具，不要凭空猜测
 - 可以连续调用多个工具
-- 工具失败时告诉用户原因，不要假装成功`.trim();
+- 工具失败时告诉用户原因，不要假装成功
+- 当用户表达了对回复风格的偏好时，主动调用 add_behavior_rule 工具保存`.trim();
+
 }
 
 
