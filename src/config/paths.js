@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, "../../");
 // 根目录：所有数据的起点
-const ROOT = process.env.DATA_DIR ?? path.join(os.homedir(), ".my-openclaw");
+const ROOT = process.env.DATA_DIR || path.join(os.homedir(), ".my-openclaw");
 
 export const paths = {
   // 根目录
@@ -22,6 +22,10 @@ export const paths = {
   builtinSkillsDir:   (agentId = "default") => path.join(PROJECT_ROOT, "agent", agentId, "skills"),
   userSkillsDir: (agentId = "default") =>
     path.join(ROOT, "agents", agentId, "skills"),
+
+  
+  agentsFile: (agentId = "default") =>
+    path.join(ROOT, "agents", agentId, "agents.md"),
 
   // Session 相关
   sessionsDir: (agentId = "default") => path.join(ROOT, "agents", agentId, "sessions"),

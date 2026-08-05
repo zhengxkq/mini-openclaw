@@ -1,5 +1,8 @@
-.env.local
-.env.*.local
+.env
+.env.*
+!.env.example
+# 运行时数据（DATA_DIR 未设置时落在 ~/.my-openclaw，Docker 落在 /data）
+agents/
 node_modules
 client/node_modules
 client/dist
