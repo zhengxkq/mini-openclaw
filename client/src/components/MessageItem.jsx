@@ -2,6 +2,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ToolCallCard } from "./ToolCallCard.jsx";
+import { RunTimeline } from "./RunTimeline.jsx";
+import { DraftReplies } from "./DraftReplies.jsx";
 
 export function MessageItem({ message }) {
   const { role, content, isStreaming, toolCalls } = message;
@@ -19,10 +21,12 @@ export function MessageItem({ message }) {
 
       {/* 消息内容 */}
       <div className={`max-w-[70%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
+        {!isUser && <RunTimeline events={message.runEvents} />}
         {/* 工具调用卡片 */}
         {toolCalls?.map(tc => (
           <ToolCallCard key={tc.id} toolCall={tc} />
         ))}
+        {!isUser && <DraftReplies drafts={message.drafts} finalText={content} />}
 
         {/* 文字内容 */}
         {(content || isStreaming) && (
