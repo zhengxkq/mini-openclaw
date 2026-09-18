@@ -5,8 +5,7 @@ import { Sidebar } from "./components/Sidebar.jsx";
 import { ChatWindow } from "./components/ChatWindow.jsx";
 
 export default function App() {
-  const { activeSessionId, ensureSession } = useChatStore();
-  const sessionId = activeSessionId ?? ensureSession();
+  const { activeSessionId } = useChatStore();
 
   // 启动时自动创建第一个会话
   useEffect(() => {

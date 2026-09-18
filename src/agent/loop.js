@@ -4,135 +4,118 @@ import { toolDefinitions, executeTool } from "./tools.js";
 import { SkillsLoader } from "./skills-loader.js";
 import { costTracker } from "../observability/cost-tracker.js";
 import { createLogger } from "../observability/logger.js";
-
-
+import { AgentRunError, prepareToolCalls, assertToolResult } from "./run-policy.js";
+import { RunController } from "./run-controller.js";
+import { sampleModel } from "./model-step.js";
 
 const MAX_ROUNDS = 10;
 const skillsLoader = new SkillsLoader();
 const logger = createLogger('AgentLoop');
 
-export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn) {
-  let round = 0;
+export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn, options = {}) {
+  const run = new RunController({ maxRounds: MAX_ROUNDS, ...options });
   const doExecute = executeToolFn ?? executeTool;
-  
-  while (true) {
-    round++;
+  const toolResults = [];
+  let draftId = null, draftSeq = 0;
+  const notifyDraft = async details => {
+    const event = { ...details, type: "assistant_draft", runId: run.id,
+      draftId, round: run.round, seq: ++draftSeq };
+    try { await options.onDraft?.(event); }
+    catch { throw new AgentRunError("OUTPUT_ERROR", "草稿推送失败，本次运行已停止。"); }
+  };
+  const notifyTool = async event => {
+    try { await onToolCall?.(event); }
+    catch { throw new AgentRunError("OUTPUT_ERROR", "工具状态推送失败，本次运行已停止。"); }
+  };
 
-    if (round > MAX_ROUNDS) {
-      const msg = `⚠️ 已达最大轮数 ${MAX_ROUNDS}，强制终止`;
-      onChunk?.(msg);
-      return msg;
-    }
+  try {
+    while (true) {
+      // ① 控制器先批准下一轮，才允许请求模型。
+      await run.beginRound();
 
-    // 全程用流式，通过 finish_reason 判断走哪条路
-    const stream = await client.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools: toolDefinitions,
-      stream: true,
-      stream_options: { include_usage: true }  // ← 加这个才能拿到 usage
-    });
+      draftId = `${run.id}:${run.round}`;
+      await notifyDraft({ action: "start" });
 
-    // 需要自己从流里「拼」出完整的 assistant 消息
-    let fullContent = "";
-    let finishReason = null;
-    const toolCallsMap = {}; // index → { id, name, arguments }
-    let usage = null;
+      console.log("[课2]模型输入", JSON.stringify({ round: run.round, messages }));
+      const step = await sampleModel(messages, options.requestModel, text => notifyDraft({ action: "delta", text }));
+      if (step.usage) {
+        costTracker.record({ model: MODEL, inputTokens: step.usage.prompt_tokens,
+          outputTokens: step.usage.completion_tokens, sessionId: messages[0]?.sessionId,
+          operation: "agent_loop" });
+      }
+      await run.move("deciding", "模型响应已收齐，应用决定下一步", {
+        finishReason: step.finishReason, toolCount: step.toolCalls.length
+      });
 
-    for await (const chunk of stream) {
-      const choice = chunk.choices[0];
-      if (!choice) {
-        // 最后一个 chunk 没有 choices，但有 usage
-        if (chunk.usage) usage = chunk.usage;  // ← 新增
+      // ② 工具请求：先检查整批，再通过原执行器执行，最后回填。
+      if (step.finishReason === "tool_calls") {
+        await run.move("validating", "检查工具名称、编号与参数");
+        const prepared = prepareToolCalls(step.toolCalls, toolDefinitions);
+        await notifyDraft({ action: "status", status: "intermediate", reason: "本轮转入工具执行，这段文字是过程说明" });
+        messages.push({ role: "assistant", content: step.answer || null,
+          tool_calls: prepared.map(item => item.toolCall) });
+        await run.move("executing", "整批请求检查通过，进入执行器；权限由 Sandbox 再检查");
+
+        for (const { toolCall, args } of prepared) {
+          const name = toolCall.function.name;
+          const event = { id: toolCall.id, name, args };
+          await notifyTool({ ...event, status: "running" });
+          let result;
+          try {
+            result = await doExecute(name, args);
+            assertToolResult(result, name);
+          } catch (error) {
+            await notifyTool({ ...event, status: "error" });
+            if (error instanceof AgentRunError) throw error;
+            throw new AgentRunError("TOOL_FAILED", `${name} 执行异常，本次运行已停止。`);
+          }
+          messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
+          toolResults.push({ id: toolCall.id, name, args: structuredClone(args), content: result });
+          console.log("[课2]工具返回", toolCall.id, result);
+          await notifyTool({ ...event, status: "done" });
+        }
+        await run.move("ready", "工具结果已写回，继续让模型处理结果", { decision: "continue" });
+        draftId = null;
         continue;
       }
 
-      const delta = choice.delta;
-      finishReason = choice.finish_reason ?? finishReason;
-
-      // 普通文字内容——实时推出去
-      if (delta?.content) {
-        fullContent += delta.content;
-        onChunk?.(delta.content);
+      // ③ 模型说 stop 只是候选回答；能否接受，由应用的验收函数决定。
+      if (step.finishReason !== "stop" || step.toolCalls.length > 0) {
+        throw new AgentRunError("MODEL_FINISH_ERROR", `模型响应不完整或不一致：${step.finishReason ?? "缺少结束原因"}`);
+      }
+      await run.move("checking", "模型停止输出，开始检查候选回答");
+      await notifyDraft({ action: "status", status: "checking", reason: "文字已收齐，正在验收" });
+      const verdict = await run.reviewAnswer({ answer: step.answer, messages, toolResults });
+      if (verdict.action === "continue") {
+        await notifyDraft({ action: "status", status: "rejected", reason: verdict.reason });
+        messages.push({ role: "assistant", content: step.answer });
+        // 这是应用生成的补充要求，不冒充新的用户消息。
+        messages.push({ role: "system", content: `应用验收反馈：${verdict.followUp}` });
+        await run.move("ready", verdict.reason, { decision: "continue", source: "completion_check" });
+        draftId = null;
+        continue;
       }
 
-      // 工具调用内容——流式里是分块传来的，需要手动拼接
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (!toolCallsMap[tc.index]) {
-            toolCallsMap[tc.index] = { id: tc.id, name: "", arguments: "" };
-          }
-          if (tc.function?.name) {
-            toolCallsMap[tc.index].name += tc.function.name;
-          }
-          if (tc.function?.arguments) {
-            toolCallsMap[tc.index].arguments += tc.function.arguments;
-          }
-        }
-      }
+      // 候选答案验收后才发给用户，避免被否决的答案残留在页面。
+      try { await onChunk?.(step.answer); }
+      catch { throw new AgentRunError("OUTPUT_ERROR", "回答推送失败，本次运行已停止。"); }
+      await notifyDraft({ action: "status", status: "accepted", reason: verdict.reason });
+      draftId = null;
+      await run.move("responded", verdict.reason, { decision: "accept", goalStatus: verdict.goalStatus });
+      return step.answer;
+    }
+  } catch (error) {
+    const failure = error instanceof AgentRunError ? error
+      : new AgentRunError("INTERNAL_ERROR", "运行过程发生异常，本次任务未完成。");
+
+    if (draftId) {
+      try { await notifyDraft({ action: "status", status: "failed", reason: failure.message }); }
+      catch { /* 推送也失败时保留原错误，Gateway 继续处理 error / done。 */ }
     }
 
-    // ── 情况1：AI 要调工具 ────────────────────────────────────
-    if (finishReason === "tool_calls") {
-      const toolCalls = Object.values(toolCallsMap).map(tc => ({
-        id: tc.id,
-        type: "function",
-        function: { name: tc.name, arguments: tc.arguments }
-      }));
-
-      // 把 AI 的工具调用消息加入历史
-      messages.push({
-        role: "assistant",
-        content: fullContent || null,
-        tool_calls: toolCalls
-      });
-
-      // 执行所有工具
-      for (const toolCall of toolCalls) {
-        const args = JSON.parse(toolCall.function.arguments);
-        const toolName = toolCall.function.name;
-
-        onToolCall?.({ name: toolName, args });
-
-        const result = await doExecute(toolName, args);
-
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result
-        });
-      }
-
-      console.log('模型usage:', usage);
-      // 流结束后记录费用
-      if (usage) {
-        const cost = costTracker.record({
-          model: MODEL,
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens,
-          sessionId: messages[0]?.sessionId,
-          operation: "agent_loop"
-        });
-        logger.debug("API调用费用", {
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens,
-          cost: `¥${cost.totalCost.toFixed(6)}`
-        });
-      }
-      continue; // 继续循环
-    }
-
-    // ── 情况2：正常结束 ───────────────────────────────────────
-    if (finishReason === "stop") {
-      return fullContent;
-    }
-
-    // ── 情况3：意外情况 ───────────────────────────────────────
-    console.error("[AgentLoop] 意外的 finish_reason:", finishReason);
-    break;
+    await run.fail(failure);
+    throw failure;
   }
-
-  return "";
 }
 
 export function buildSystemPrompt(soulContent = "", sessionId = "", episodicContent = "", proceduralContent = "") {

@@ -5,9 +5,10 @@ import { useChatStore } from "../store/chat.js";
 export function useSSE(sessionId) {
   const eventSourceRef = useRef(null);
   const currentMsgIdRef = useRef(null); // 当前正在流式输出的消息 ID
-  const store = useChatStore();
+  const reconnectRef = useRef(null);
 
   const connect = useCallback(() => {
+    const store = useChatStore.getState();
     console.log("[useSSE] connect 调用, sessionId:", sessionId); // ← 加这行
     if (!sessionId) {
         console.log("[useSSE] sessionId 为空，跳过"); // ← 加这行
@@ -56,7 +57,7 @@ export function useSSE(sessionId) {
             const event = JSON.parse(raw);
             handleEvent(event, sessionId, store, currentMsgIdRef);
           } catch (e) {
-            console.warn("[SSE] 解析失败:", raw);
+            console.warn("[SSE] 解析失败:", { raw, error: e });
           }
         }
       }
@@ -64,7 +65,9 @@ export function useSSE(sessionId) {
       if (e.name !== "AbortError") {
         console.error("[SSE] 错误:", e);
         // 3 秒后重连
-        setTimeout(() => connect(), 3000);
+        setTimeout(() => {
+          reconnectRef.current?.();
+        }, 3000);
       }
     });
 
@@ -73,16 +76,32 @@ export function useSSE(sessionId) {
   }, [sessionId]);
 
   useEffect(() => {
+    reconnectRef.current = connect;
     connect();
     return () => {
+      reconnectRef.current = null;
+
       eventSourceRef.current?.close();
     };
   }, [connect]);
 }
 
 // 处理各类 SSE 事件
-function handleEvent(event, sessionId, store, currentMsgIdRef) {
+export function handleEvent(event, sessionId, store, currentMsgIdRef) {
   switch (event.type) {
+    case "assistant_draft":
+      if (!currentMsgIdRef.current) {
+        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
+      }
+      store.applyDraftEvent(sessionId, currentMsgIdRef.current, event);
+      break;
+
+    case "run_state":
+      if (!currentMsgIdRef.current) {
+        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
+      }
+      store.appendRunEvent(sessionId, currentMsgIdRef.current, event);
+      break;
     case "typing":
       // 还没开始输出时，创建一个空的 AI 消息占位
       if (!currentMsgIdRef.current) {
@@ -104,7 +123,7 @@ function handleEvent(event, sessionId, store, currentMsgIdRef) {
         currentMsgIdRef.current = store.startAssistantMessage(sessionId);
       }
       store.upsertToolCall(sessionId, currentMsgIdRef.current, {
-        id: `tool-${Date.now()}`,
+        id: event.id,
         name: event.name,
         args: event.args,
         status: event.status ?? "running"
@@ -119,21 +138,23 @@ function handleEvent(event, sessionId, store, currentMsgIdRef) {
       }
       break;
 
-    case "message":
+    case "message": {
       // 完整消息（Heartbeat 推送等）
-      store.startAssistantMessage(sessionId);
       const msgId = store.startAssistantMessage(sessionId);
       store.appendChunk(sessionId, msgId, event.text);
       store.finishStreaming(sessionId, msgId);
       break;
 
+    }
+
     case "error":
       console.error("[SSE] 服务端错误:", event.message);
-      if (currentMsgIdRef.current) {
-        store.appendChunk(sessionId, currentMsgIdRef.current, `\n\n❌ ${event.message}`);
-        store.finishStreaming(sessionId, currentMsgIdRef.current);
-        currentMsgIdRef.current = null;
+      if (!currentMsgIdRef.current) {
+        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
       }
+      store.appendChunk(sessionId, currentMsgIdRef.current, `\n\n❌ ${event.message}`);
+      store.finishStreaming(sessionId, currentMsgIdRef.current);
+      currentMsgIdRef.current = null;
       break;
   }
 }

@@ -1,6 +1,7 @@
 // src/gateway/index.js
 import "dotenv/config";
 import fs from "fs";
+import readline from "node:readline";
 import path from "path";
 import os from "os";
 import { SessionManager } from "./session-manager.js";
@@ -18,6 +19,7 @@ import { createLogger } from "../observability/logger.js";
 import { paths, ensureDataDirs } from "../config/paths.js";
 import { EpisodicMemory } from "../agent/episodic-memory.js";
 import { ProceduralMemory } from "../agent/procedural-memory.js";
+import { AgentRunError } from "../agent/run-policy.js";
 const logger = createLogger('Gateway');
 
 export class Gateway {
@@ -87,7 +89,7 @@ export class Gateway {
       // session.messages = await this.#memoryManager.compressIfNeeded(
       //   session.messages
       // );
-
+      let pusher;
       try {
         const spanMemory = tracer.startSpan("memory_compress");
         // ── 记忆压缩 ──────────────────────────────────────
@@ -117,23 +119,19 @@ export class Gateway {
         const sourceChannel = this.#channels.find(c => c.name === msg.channelName);
 
         // 发送「正在输入」状态
-        sourceChannel?.sendTyping?.(msg.sessionId);
+        await sourceChannel?.sendTyping?.(msg.sessionId);
 
         
         const isHttp = msg.channelName === "http";
         
-        // 流式推送器：攒够内容或超时就发一次
-        let pusher;
 
         if (isHttp) {
           // HTTP 用 SSE chunk 推送，实时打字机效果
           pusher = {
-            push: async (chunk) => {
+            push: async chunk => {
               await sourceChannel?.sendChunk(msg.sessionId, chunk);
             },
-            flush: async () => {
-              await sourceChannel?.sendDone(msg.sessionId);
-            }
+            flush: async () => {}
           };
         } else {
           // Telegram 用原来的批量推送
@@ -162,30 +160,34 @@ export class Gateway {
             messages,
             (chunk) => {
               process.stdout.write(chunk);
-              pusher?.push(chunk);
+              return pusher?.push(chunk);
             },
-            (toolCall) => {
-              logger.debug("工具调用", { tool: toolCall.name, args: toolCall.args });
-              this.#sessionManager.appendTranscript(session, {
-                type: "tool_call",
-                tool: toolCall.name,
-                args: toolCall.args
-              });
-
-              // HTTP channel 推送工具调用状态给前端
-              if (isHttp) {
-                sourceChannel?.sendToolCall(msg.sessionId, {
-                  name: toolCall.name,
-                  args: toolCall.args,
-                  status: "running"
+            async (toolCall) => {
+              const { id, name, args, status = "running" } = toolCall;
+              if (status === "running") {
+                logger.debug("工具调用", { tool: name, args });
+                this.#sessionManager.appendTranscript(session, {
+                  type: "tool_call", tool: name, args, callId: id
                 });
+                console.log(`\n  [工具] ${name}(${JSON.stringify(args)})`);
               }
-              console.log(`\n  [工具] ${toolCall.name}(${JSON.stringify(toolCall.args)})`);
-              sourceChannel?.sendTyping?.(msg.sessionId);
+              if (isHttp) {
+                await sourceChannel?.sendToolCall(msg.sessionId, { id, name, args, status });
+              }
             },
             (toolName, args) => this.#sandbox.executeTool(
               toolName, args, msg.sessionId, executeTool
-            )
+            ),
+            {
+              onDraft: async event => {
+                if (isHttp) await sourceChannel?.sendDraft(msg.sessionId, event);
+              },
+              onEvent: async event => {
+                console.log("[Harness]", JSON.stringify(event));
+                this.#sessionManager.appendTranscript(session, event);
+                if (isHttp) await sourceChannel?.sendRunEvent(msg.sessionId, event);
+              }
+            }
           );
         }
 
@@ -235,20 +237,33 @@ export class Gateway {
         console.log();
         return reply;
 
-      } catch(e) {
-        // ── 错误追踪 ──────────────────────────────────────
-        tracer.endSpan(spanTotal, { error: e.message });
-        tracer.save({ sessionId: msg.sessionId, success: false, error: e.message });
-
-        logger.error("消息处理失败", {
-          sessionId: msg.sessionId,
-          error: e.message,
-          stack: e.stack?.slice(0, 200)
-        });
-
+      } catch (error) {
+        pusher?.cancel?.();
+        const code = error instanceof AgentRunError ? error.code : "INTERNAL_ERROR";
+        const message = error instanceof AgentRunError
+          ? error.message
+          : "服务执行异常，本次任务未完成，请稍后重试。";
         const sourceChannel = this.#channels.find(c => c.name === msg.channelName);
-        await sourceChannel?.send(msg.sessionId, `❌ 出错了：${e.message}`);
-        throw e;
+
+        if (msg.channelName === "http") {
+          await sourceChannel?.sendError(msg.sessionId, `${code}：${message}`);
+        } else {
+          await sourceChannel?.send(msg.sessionId, `❌ ${code}：${message}`);
+        }
+
+        this.#sessionManager.appendTranscript(session, {
+          type: "run_failed", code, message
+        });
+        tracer.endSpan(spanTotal, { error: message, code });
+        tracer.save({ sessionId: msg.sessionId, success: false, code, error: message });
+        logger.error("消息处理失败", { sessionId: msg.sessionId, code, error: error.message });
+        // 已经向用户报告失败；这里结束本次渠道任务，队列继续服务下一条消息。
+        return;
+      } finally {
+        if (msg.channelName === "http") {
+          const sourceChannel = this.#channels.find(c => c.name === msg.channelName);
+          await sourceChannel?.sendDone(msg.sessionId);
+        }
       }
       
     });
@@ -317,10 +332,9 @@ export class Gateway {
 
       const reply = await runAgentLoop(
         messages,
-        (chunk) => process.stdout.write(chunk),
-        (toolCall) => {
-          console.log(`\n[Heartbeat] 工具调用: ${toolCall.name}`);
-        }
+        chunk => process.stdout.write(chunk),
+        toolCall => console.log(`\n[Heartbeat] 工具 ${toolCall.status}: ${toolCall.name}`),
+        (name, args) => this.#sandbox.executeTool(name, args, "heartbeat", executeTool)
       );
 
       console.log("\n[Heartbeat] AI 回复完成");
@@ -374,24 +388,37 @@ export class Gateway {
 function createStreamPusher(sessionId, channel) {
   let buffer = "";
   let timer = null;
-  const FLUSH_INTERVAL = 1500; // 每 1.5 秒发一次
+  let deliveryError = null;
+  let inFlight = Promise.resolve();
+  const FLUSH_INTERVAL = 1500;
 
-  const flush = async () => {
+  const flush = () => {
     if (timer) { clearTimeout(timer); timer = null; }
-    if (!buffer.trim()) return;
-    const toSend = buffer;
-    buffer = "";
-    await channel.send(sessionId, toSend);
+    if (buffer.trim()) {
+      const toSend = buffer;
+      buffer = "";
+      inFlight = inFlight.then(() => channel.send(sessionId, toSend));
+      inFlight.catch(error => { deliveryError = error; });
+    }
+    // 没有新缓冲时，也要等已开始的发送结束。
+    return inFlight;
   };
 
   const push = (chunk) => {
+    if (deliveryError) throw deliveryError;
     buffer += chunk;
-    // 重置定时器——有新内容就延迟发送
     if (timer) clearTimeout(timer);
-    timer = setTimeout(flush, FLUSH_INTERVAL);
+    timer = setTimeout(() => {
+      flush().catch(error => { deliveryError = error; });
+    }, FLUSH_INTERVAL);
   };
 
-  return { push, flush };
+  const cancel = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    buffer = "";
+  };
+
+  return { push, flush, cancel };
 }
 
 // ─── 启动入口：根据环境决定用哪个 Channel ─────────────────────

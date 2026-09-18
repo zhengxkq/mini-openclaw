@@ -68,7 +68,7 @@ export const useChatStore = create((set, get) => ({
   // ── 消息操作 ─────────────────────────────────────────────
   addUserMessage: (sessionId, content) => {
     const message = {
-      id: `msg-${Date.now()}`,
+      id: crypto.randomUUID(),
       role: "user",
       content,
       isStreaming: false,
@@ -92,7 +92,7 @@ export const useChatStore = create((set, get) => ({
   // 开始一条 AI 消息（流式输出开始时调用）
   startAssistantMessage: (sessionId) => {
     const message = {
-      id: `msg-${Date.now()}`,
+      id: crypto.randomUUID(),
       role: "assistant",
       content: "",
       isStreaming: true,
@@ -142,7 +142,43 @@ export const useChatStore = create((set, get) => ({
       };
     });
   },
-
+  applyDraftEvent: (sessionId, messageId, event) => {
+    set(state => ({
+      messages: {
+        ...state.messages,
+        [sessionId]: (state.messages[sessionId] ?? []).map(message => {
+          if (message.id !== messageId) return message;
+          const drafts = message.drafts ?? [];
+          const previous = drafts.find(draft => draft.id === event.draftId);
+          // 防止同一事件重复拼接；这不是断线重放协议。
+          if (previous && event.seq <= previous.lastSeq) return message;
+          const draft = { ...(previous ?? { id: event.draftId, runId: event.runId,
+            round: event.round, text: "", status: "streaming" }), lastSeq: event.seq };
+          if (event.action === "delta") draft.text += event.text;
+          if (event.action === "status") {
+            draft.status = event.status;
+            draft.reason = event.reason;
+          }
+          return { ...message, drafts: previous
+            ? drafts.map(item => item.id === draft.id ? draft : item)
+            : [...drafts, draft] };
+        })
+      }
+    }));
+  },
+  appendRunEvent: (sessionId, messageId, event) => {
+    set(state => ({
+      messages: {
+        ...state.messages,
+        [sessionId]: (state.messages[sessionId] ?? []).map(message => {
+          if (message.id !== messageId) return message;
+          const previous = message.runEvents ?? [];
+          if (previous.some(e => e.runId === event.runId && e.seq === event.seq)) return message;
+          return { ...message, runEvents: [...previous, event] };
+        })
+      }
+    }));
+  },
   // 添加或更新工具调用
   upsertToolCall: (sessionId, messageId, toolCall) => {
     set(state => ({
