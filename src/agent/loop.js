@@ -1,6 +1,7 @@
 // src/agent/loop.js（最终版）
 import { client, MODEL } from "../client.js";
 import { collectToolDelta } from "./tool-call-stream.js";
+import { AgentRunError, prepareToolCalls } from "./run-policy.js";
 import { toolDefinitions, executeTool } from "./tools.js";
 import { SkillsLoader } from "./skills-loader.js";
 import { costTracker } from "../observability/cost-tracker.js";
@@ -75,6 +76,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
         function: { name: tc.name, arguments: tc.arguments }
       }));
 
+      const prepared = prepareToolCalls(toolCalls, toolDefinitions);
       // 把 AI 的工具调用消息加入历史
       messages.push({
         role: "assistant",
@@ -83,8 +85,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
       });
 
       // 执行所有工具
-      for (const toolCall of toolCalls) {
-        const args = JSON.parse(toolCall.function.arguments);
+      for (const { toolCall, args } of prepared) {
         const toolName = toolCall.function.name;
 
         const event = { id: toolCall.id, name: toolName, args };
