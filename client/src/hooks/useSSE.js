@@ -89,19 +89,6 @@ export function useSSE(sessionId) {
 // 处理各类 SSE 事件
 export function handleEvent(event, sessionId, store, currentMsgIdRef) {
   switch (event.type) {
-    case "assistant_draft":
-      if (!currentMsgIdRef.current) {
-        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
-      }
-      store.applyDraftEvent(sessionId, currentMsgIdRef.current, event);
-      break;
-
-    case "run_state":
-      if (!currentMsgIdRef.current) {
-        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
-      }
-      store.appendRunEvent(sessionId, currentMsgIdRef.current, event);
-      break;
     case "typing":
       // 还没开始输出时，创建一个空的 AI 消息占位
       if (!currentMsgIdRef.current) {

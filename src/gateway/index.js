@@ -177,17 +177,7 @@ export class Gateway {
             },
             (toolName, args) => this.#sandbox.executeTool(
               toolName, args, msg.sessionId, executeTool
-            ),
-            {
-              onDraft: async event => {
-                if (isHttp) await sourceChannel?.sendDraft(msg.sessionId, event);
-              },
-              onEvent: async event => {
-                console.log("[Harness]", JSON.stringify(event));
-                this.#sessionManager.appendTranscript(session, event);
-                if (isHttp) await sourceChannel?.sendRunEvent(msg.sessionId, event);
-              }
-            }
+            )
           );
         }
 
