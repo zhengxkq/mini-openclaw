@@ -104,6 +104,13 @@ export function handleEvent(event, sessionId, store, currentMsgIdRef) {
       store.appendChunk(sessionId, currentMsgIdRef.current, event.text);
       break;
 
+    case "run_event":
+      if (!currentMsgIdRef.current) {
+        currentMsgIdRef.current = store.startAssistantMessage(sessionId);
+      }
+      store.applyRunEvent(sessionId, currentMsgIdRef.current, event.event);
+      break;
+    
     case "tool_call":
       // 工具调用，附加到当前消息
       if (!currentMsgIdRef.current) {

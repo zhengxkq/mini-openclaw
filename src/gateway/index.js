@@ -177,7 +177,10 @@ export class Gateway {
             },
             (toolName, args) => this.#sandbox.executeTool(
               toolName, args, msg.sessionId, executeTool
-            )
+            ),
+            {
+              onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined
+            }
           );
         }
 

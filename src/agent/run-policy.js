@@ -52,3 +52,12 @@ export function assertToolResult(result) {
     throw new AgentRunError("TOOL_FAILED", "工具返回了错误，本次任务已停止。");
   }
 }
+
+export function assertVerdict(verdict) {
+  if (!verdict || !["accept", "continue"].includes(verdict.action)) {
+    throw new AgentRunError("INVALID_VERDICT", "验收函数必须返回 accept 或 continue。");
+  }
+  if (verdict.action === "continue" && (typeof verdict.followUp !== "string" || !verdict.followUp.trim())) {
+    throw new AgentRunError("INVALID_VERDICT", "要求补答时必须说明补充要求。");
+  }
+}

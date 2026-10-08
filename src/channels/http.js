@@ -65,6 +65,10 @@ export class HttpChannel extends BaseChannel {
   async sendToolCall(sessionId, toolCall) {
     this.#writeSSE(sessionId, { type: "tool_call", ...toolCall });
   }
+  
+  async sendRunEvent(sessionId, event) {
+    this.#writeSSE(sessionId, { type: "run_event", event });
+  }
 
   async sendDone(sessionId) {
     this.#writeSSE(sessionId, { type: "done" });
