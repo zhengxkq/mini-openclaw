@@ -1,6 +1,7 @@
 // src/agent/loop.js（最终版）
 import { client, MODEL } from "../client.js";
 import { collectToolDelta } from "./tool-call-stream.js";
+import { AgentRunError, prepareToolCalls, assertToolResult } from "./run-policy.js";
 import { toolDefinitions, executeTool } from "./tools.js";
 import { SkillsLoader } from "./skills-loader.js";
 import { costTracker } from "../observability/cost-tracker.js";
@@ -20,9 +21,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
     round++;
 
     if (round > MAX_ROUNDS) {
-      const msg = `⚠️ 已达最大轮数 ${MAX_ROUNDS}，强制终止`;
-      onChunk?.(msg);
-      return msg;
+      throw new AgentRunError("ROUND_LIMIT", `已达到 ${MAX_ROUNDS} 轮，本次任务未完成。`);
     }
 
     console.log("[本轮请求]", round, messages.map(m => m.role));
@@ -75,6 +74,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
         function: { name: tc.name, arguments: tc.arguments }
       }));
 
+      const prepared = prepareToolCalls(toolCalls, toolDefinitions);
       // 把 AI 的工具调用消息加入历史
       messages.push({
         role: "assistant",
@@ -83,14 +83,20 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
       });
 
       // 执行所有工具
-      for (const toolCall of toolCalls) {
-        const args = JSON.parse(toolCall.function.arguments);
+      for (const { toolCall, args } of prepared) {
         const toolName = toolCall.function.name;
 
         const event = { id: toolCall.id, name: toolName, args };
         await onToolCall?.({ ...event, status: "running" });
 
-        const result = await doExecute(toolName, args);
+        let result;
+        try {
+          result = await doExecute(toolName, args);
+          assertToolResult(result);
+        } catch (error) {
+          await onToolCall?.({ ...event, status: "error" });
+          throw error instanceof AgentRunError ? error : new AgentRunError("TOOL_FAILED", "工具执行失败。");
+        }
         console.log("[工具结果]", toolCall.id, toolName, result);
 
         messages.push({
@@ -127,11 +133,8 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn)
     }
 
     // ── 情况3：意外情况 ───────────────────────────────────────
-    console.error("[AgentLoop] 意外的 finish_reason:", finishReason);
-    break;
+    throw new AgentRunError("MODEL_FINISH_ERROR", `模型没有完整结束：${finishReason ?? "缺失"}`);
   }
-
-  return "";
 }
 
 export function buildSystemPrompt(soulContent = "", sessionId = "", episodicContent = "", proceduralContent = "") {
