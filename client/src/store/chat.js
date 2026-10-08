@@ -158,6 +158,13 @@ export const useChatStore = create((set, get) => ({
       }
     }));
   },
+  applyRunEvent: (sessionId, messageId, event) => {
+    set(state => ({ messages: {
+      ...state.messages,
+      [sessionId]: (state.messages[sessionId] ?? []).map(m =>
+        m.id === messageId ? { ...m, run: { ...m.run, ...event } } : m)
+    } }));
+  },
 
   getMessages: (sessionId) => {
     return get().messages[sessionId] ?? [];
