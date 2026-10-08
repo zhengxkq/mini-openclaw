@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { prepareToolCalls } from "./run-policy.js";
+import { prepareToolCalls, assertToolResult } from "./run-policy.js";
 
 const definitions = [{ function: {
   name: "calculate",
@@ -81,5 +81,30 @@ test("同一批重复编号被拒绝", () => {
    assert.throws(() => prepareToolCalls([good, duplicate], definitions), error => {
     console.log("重复编号拒绝原因：", error.code);
     return error.code === "INVALID_TOOL_CALL";
+  });
+});
+
+test("正常工具结果可以写回", () => {
+  const result = '{"result":579}';
+  console.log("正常结果：", result);
+  assert.doesNotThrow(() => assertToolResult(result));
+});
+
+
+test("工具返回 error 时拒绝写回", () => {
+  const result = '{"error":"计算失败"}';
+  console.log("失败结果：", result);
+  assert.throws(() => assertToolResult(result), error => {
+    console.log("结果拒绝原因：", error.code);
+    return error.code === "TOOL_FAILED";
+  });
+});
+
+test("对象结果被拒绝", () => {
+  const result = { result: 579 };
+  console.log("对象结果：", result);
+  assert.throws(() => assertToolResult(result), error => {
+    console.log("结果类型拒绝原因：", error.code);
+    return error.code === "INVALID_TOOL_RESULT";
   });
 });

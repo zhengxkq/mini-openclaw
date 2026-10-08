@@ -41,3 +41,14 @@ export function prepareToolCalls(calls, definitions) {
     return { toolCall: call, args };
   });
 }
+
+export function assertToolResult(result) {
+  if (typeof result !== "string" || !result.trim()) {
+    throw new AgentRunError("INVALID_TOOL_RESULT", "工具没有返回非空字符串。");
+  }
+  let parsed;
+  try { parsed = JSON.parse(result); } catch { return; }
+  if (parsed && typeof parsed === "object" && Object.hasOwn(parsed, "error")) {
+    throw new AgentRunError("TOOL_FAILED", "工具返回了错误，本次任务已停止。");
+  }
+}
