@@ -93,7 +93,7 @@ export class Gateway {
       try {
         const spanMemory = tracer.startSpan("memory_compress");
         // ── 记忆压缩 ──────────────────────────────────────
-        session.messages = await this.#memoryManager.compressIfNeeded(session.messages);
+        // 上下文整理改由 Loop 在请求前处理；保留完整 session.messages。
         tracer.endSpan(spanMemory);
 
         // 读取 soul.md（压缩后可能已更新，重新读）
@@ -155,6 +155,7 @@ export class Gateway {
             pusher?.push(chunk);
           });
         } else {
+          session.contextState ??= {};
           // 原有单 Agent 逻辑
           reply = await runAgentLoop(
             messages,
@@ -179,7 +180,8 @@ export class Gateway {
               toolName, args, msg.sessionId, executeTool
             ),
             {
-              onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined
+              onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
+              contextState: session.contextState
             }
           );
         }
@@ -192,7 +194,7 @@ export class Gateway {
         session.messages.push({ role: "assistant", content: reply });
 
         const rounds = session.messages.filter(m => m.role === "user").length;
-        if (rounds % 5 === 0) {
+        if (process.env.COURSE_MODE !== "1" && rounds % 5 === 0) {
           this.#memoryManager.extractAndSaveUserInfo(session.messages)
             .catch(e => console.error("[Memory] 提取用户信息失败:", e));
         }
@@ -203,7 +205,7 @@ export class Gateway {
         });
 
         // ← 放在这里，agent_reply 记录完之后
-        this.#episodicMemory.ingest(msg.sessionId, [
+        if (process.env.COURSE_MODE !== "1") this.#episodicMemory.ingest(msg.sessionId, [
           { role: "user", content: msg.text },
           { role: "assistant", content: reply }
         ]).catch(e => console.error("[EpisodicMemory] 提取失败:", e.message));
