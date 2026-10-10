@@ -47,6 +47,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
 
       await emit({ round, phase: "正在请求模型", draft: "", promptTokens: null });
       
+      await options.refreshContext?.(messages);
       const context = await buildModelContext(messages, {
         tools: toolDefinitions, maxInputBytes: options.maxInputBytes ?? 64000,
         summarize: summarizeHistory,
@@ -202,7 +203,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
   }
 }
 
-export function buildSystemPrompt(soulContent = "", sessionId = "", episodicContent = "", proceduralContent = "") {
+export function buildSystemPrompt(memoryContent = "", sessionId = "") {
   const skillsContent = skillsLoader.load();
   // 生成北京时间字符串
   const now = new Date().toLocaleString("zh-CN", {
@@ -230,11 +231,7 @@ export function buildSystemPrompt(soulContent = "", sessionId = "", episodicCont
 
 ${sessionId ? `## 当前会话信息\n- 当前用户的 session_id 是：${sessionId}\n- 设置提醒时必须使用这个 session_id，不能用其他值` : ""}
 
-${proceduralContent}
-
-${soulContent ? `## 关于你的记忆\n${soulContent}` : ""}
-
-${episodicContent}
+${memoryContent ? `## 关于你的记忆\n${memoryContent}` : ""}
 
 ${skillsContent}
 
@@ -242,7 +239,7 @@ ${skillsContent}
 - 需要实时数据时主动调用工具，不要凭空猜测
 - 可以连续调用多个工具
 - 工具失败时告诉用户原因，不要假装成功
-- 当用户表达了对回复风格的偏好时，主动调用 add_behavior_rule 工具保存`.trim();
+- 长期记忆由用户用 /memory 管理；不要声称未执行的保存、更新或删除已经完成。`.trim();
 
 }
 

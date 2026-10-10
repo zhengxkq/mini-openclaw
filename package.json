@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "dotenv -e .env -e .env.development -e .env.local -- node src/gateway/index.js",
     "start": "dotenv -e .env -e .env.production -- node src/gateway/index.js",
-    "test": "dotenv -e .env -e .env.local -- node --test src/gateway/lane-queue.test.js src/gateway/session-manager.test.js src/agent/skills-loader.test.js src/agent/procedural-memory.test.js src/agent/episodic-memory.test.js"
+    "test": "dotenv -e .env -e .env.local -- node --test src/gateway/lane-queue.test.js src/gateway/session-manager.test.js src/agent/skills-loader.test.js src/agent/memory-governance.test.js"
   },
   "keywords": [],
   "author": "",

@@ -5,7 +5,6 @@ import readline from "node:readline";
 import path from "path";
 import os from "os";
 import { SessionManager } from "./session-manager.js";
-import { MemoryManager } from "../agent/memory.js";
 import { runAgentLoop, buildSystemPrompt } from "../agent/loop.js";
 import { HeartbeatScheduler, buildHeartbeatMessage } from "./hearbeat.js";
 import { ReminderStore } from "../agent/reminder-store.js";
@@ -17,30 +16,27 @@ import { Tracer, generateTraceId } from "../observability/tracer.js";
 import { costTracker } from "../observability/cost-tracker.js";
 import { createLogger } from "../observability/logger.js";
 import { paths, ensureDataDirs } from "../config/paths.js";
-import { EpisodicMemory } from "../agent/episodic-memory.js";
-import { ProceduralMemory } from "../agent/procedural-memory.js";
 import { AgentRunError } from "../agent/run-policy.js";
+import { handleMemoryCommand } from "../agent/memory-command.js";
+import { memoryStore } from "../agent/memory-runtime.js";
+import { formatMemoryPrompt, selectMemories, replaceSystemContext } from "../agent/memory-input.js";
+
+
 const logger = createLogger('Gateway');
 
 export class Gateway {
   #sessionManager;
-  #memoryManager;
   #channels = [];
   #reminderStore;
   #heartbeat;
   #agentDir;
   #sandbox;
-  #episodicMemory;
-  #proceduralMemory;
 
 
   constructor() {
     this.#sessionManager = new SessionManager();
-    this.#memoryManager = new MemoryManager();
     this.#reminderStore = new ReminderStore();
     this.#sandbox = new Sandbox();
-    this.#episodicMemory = new EpisodicMemory();
-    this.#proceduralMemory = new ProceduralMemory();
 
     ensureDataDirs(); // 启动时确保所有目录存在
     this.#agentDir = paths.agentDir();
@@ -54,7 +50,23 @@ export class Gateway {
     console.log(`[Gateway] 注册 Channel: ${channel.name}`);
   }
 
+  async #replyMemoryCommand(msg, text) {
+    const channel = this.#channels.find(c => c.name === msg.channelName);
+    if (msg.channelName === "http") {
+      await channel?.sendChunk(msg.sessionId, text);
+      await channel?.sendDone(msg.sessionId);
+    } else await channel?.send(msg.sessionId, text);
+  }
+
   async #handleMessage(msg) {
+
+    const memoryReply = handleMemoryCommand(msg.text, {
+      root: paths.root, store: memoryStore, sessionId: msg.sessionId
+    });
+    if (memoryReply !== null) {
+      await this.#replyMemoryCommand(msg, memoryReply);
+      return;
+    }
 
     // ── 先检查是不是 HITL 审批命令，是的话直接处理不走 Agent ──
     const approvalResult = this.#sandbox.handleApproval(msg.text, msg.sessionId);
@@ -85,32 +97,16 @@ export class Gateway {
         content: msg.text
       });
 
-      // 读取 soul.md（每次处理消息都重新读，方便热更新）
-      // session.messages = await this.#memoryManager.compressIfNeeded(
-      //   session.messages
-      // );
       let pusher;
       try {
-        const spanMemory = tracer.startSpan("memory_compress");
-        // ── 记忆压缩 ──────────────────────────────────────
-        // 上下文整理改由 Loop 在请求前处理；保留完整 session.messages。
-        tracer.endSpan(spanMemory);
-
-        // 读取 soul.md（压缩后可能已更新，重新读）
-        const soulContent = this.#memoryManager.readSoul();
-
-        // ── 检索相关历史记忆 ─────────────────────────────────
-        const spanEpisodic = tracer.startSpan("episodic_recall");
-        const relatedEpisodes = await this.#episodicMemory.recall(msg.text);
-        const episodicContent = this.#episodicMemory.formatForPrompt(relatedEpisodes);
-        const proceduralContent = this.#proceduralMemory.formatForPrompt();
-
-        tracer.endSpan(spanEpisodic, { found: relatedEpisodes.length });
+        // 读取当前有效记忆
+        const memoryScopes = ["agent:default", `session:${msg.sessionId}`];
+        const memoryContent = formatMemoryPrompt(memoryStore, memoryScopes);
 
         // 构建本次对话的 messages
         // session.messages 保存历史，每次都带上
         const messages = [
-          { role: "system", content: buildSystemPrompt(soulContent, msg.sessionId, episodicContent, proceduralContent) },
+          { role: "system", content: buildSystemPrompt(memoryContent, msg.sessionId) },
           ...session.messages,
           { role: "user", content: msg.text }
         ];
@@ -181,7 +177,13 @@ export class Gateway {
             ),
             {
               onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
-              contextState: session.contextState
+              contextState: session.contextState,
+              refreshContext: input => {
+                const current = formatMemoryPrompt(memoryStore, memoryScopes);
+                replaceSystemContext(input, buildSystemPrompt(current, msg.sessionId));
+                console.log("[当前记忆]", selectMemories(memoryStore, memoryScopes)
+                  .map(row => ({ key: row.key, version: row.version, scope: row.scope })));
+              }
             }
           );
         }
@@ -193,22 +195,10 @@ export class Gateway {
         session.messages.push({ role: "user", content: msg.text });
         session.messages.push({ role: "assistant", content: reply });
 
-        const rounds = session.messages.filter(m => m.role === "user").length;
-        if (process.env.COURSE_MODE !== "1" && rounds % 5 === 0) {
-          this.#memoryManager.extractAndSaveUserInfo(session.messages)
-            .catch(e => console.error("[Memory] 提取用户信息失败:", e));
-        }
-
         this.#sessionManager.appendTranscript(session, {
           type: "agent_reply",
           content: reply
         });
-
-        // ← 放在这里，agent_reply 记录完之后
-        if (process.env.COURSE_MODE !== "1") this.#episodicMemory.ingest(msg.sessionId, [
-          { role: "user", content: msg.text },
-          { role: "assistant", content: reply }
-        ]).catch(e => console.error("[EpisodicMemory] 提取失败:", e.message));
 
         // ── 费用检查 ──────────────────────────────────────
         const budget = costTracker.checkBudget(10);
@@ -318,9 +308,10 @@ export class Gateway {
     await session.queue.enqueue(async () => {
       console.log("[Heartbeat] 开始执行心跳任务");
 
-      const soulContent = this.#memoryManager.readSoul();
+      const memoryScopes = ["agent:default", "session:heartbeat"];
+      const memoryContent = formatMemoryPrompt(memoryStore, memoryScopes);
       const messages = [
-        { role: "system", content: buildSystemPrompt(soulContent) },
+        { role: "system", content: buildSystemPrompt(memoryContent) },
         ...session.messages,
         { role: "user", content: heartbeatMsg }
       ];
@@ -329,7 +320,11 @@ export class Gateway {
         messages,
         chunk => process.stdout.write(chunk),
         toolCall => console.log(`\n[Heartbeat] 工具 ${toolCall.status}: ${toolCall.name}`),
-        (name, args) => this.#sandbox.executeTool(name, args, "heartbeat", executeTool)
+        (name, args) => this.#sandbox.executeTool(name, args, "heartbeat", executeTool),
+        {
+          refreshContext: input => replaceSystemContext(input,
+            buildSystemPrompt(formatMemoryPrompt(memoryStore, memoryScopes)))
+        }
       );
 
       console.log("\n[Heartbeat] AI 回复完成");
@@ -457,8 +452,8 @@ async function createCliChannel() {
           if (!text) return ask();
           if (text === "/quit") { rl.close(); return; }
           if (text === "/soul") {
-            const m = new MemoryManager();
-            console.log("\n=== soul.md ===\n" + m.readSoul());
+              console.log("\n=== 当前有效记忆 ===\n" +
+              formatMemoryPrompt(memoryStore, ["agent:default", "session:cli-user"]));
             return ask();
           }
           if (text === "/status") {
@@ -476,7 +471,7 @@ async function createCliChannel() {
           ask();
         });
       };
-      console.log("命令行模式（/quit 退出，/soul 查看记忆，/status 查看状态）");
+      console.log("命令行模式（/quit 退出，/soul 查看当前记忆，/memory list 管理入口，/status 查看状态）");
       ask();
     }
   };
