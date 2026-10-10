@@ -1,8 +1,4 @@
 // src/gateway/heartbeat.js
-import { ReminderStore } from "../agent/reminder-store.js";
-import { runAgentLoop, buildSystemPrompt } from "../agent/loop.js";
-import { MemoryManager } from "../agent/memory.js";
-
 export class HeartbeatScheduler {
   #intervalMs;
   #timer = null;

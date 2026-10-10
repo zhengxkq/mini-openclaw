@@ -18,14 +18,9 @@ export const paths = {
 
   // Agent 相关
   agentDir:    (agentId = "default") => path.join(ROOT, "agents", agentId),
-  soulFile:    (agentId = "default") => path.join(ROOT, "agents", agentId, "soul.md"),
   builtinSkillsDir:   (agentId = "default") => path.join(PROJECT_ROOT, "agent", agentId, "skills"),
   userSkillsDir: (agentId = "default") =>
     path.join(ROOT, "agents", agentId, "skills"),
-
-  
-  agentsFile: (agentId = "default") =>
-    path.join(ROOT, "agents", agentId, "agents.md"),
 
   // Session 相关
   sessionsDir: (agentId = "default") => path.join(ROOT, "agents", agentId, "sessions"),
