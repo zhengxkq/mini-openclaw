@@ -2,8 +2,6 @@
 import "dotenv/config";
 import fs from "fs";
 import readline from "node:readline";
-import path from "path";
-import os from "os";
 import { SessionManager } from "./session-manager.js";
 import { runAgentLoop, buildSystemPrompt } from "../agent/loop.js";
 import { HeartbeatScheduler, buildHeartbeatMessage } from "./hearbeat.js";
