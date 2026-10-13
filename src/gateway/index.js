@@ -1,6 +1,7 @@
 // src/gateway/index.js
 import "dotenv/config";
 import fs from "fs";
+import path from "path";
 import readline from "node:readline";
 import { SessionManager } from "./session-manager.js";
 import { runAgentLoop, buildSystemPrompt } from "../agent/loop.js";
@@ -18,10 +19,12 @@ import { AgentRunError } from "../agent/run-policy.js";
 import { handleMemoryCommand } from "../agent/memory-command.js";
 import { memoryStore } from "../agent/memory-runtime.js";
 import { formatMemoryPrompt, selectMemories, replaceSystemContext } from "../agent/memory-input.js";
-
+import { embed, EMBEDDING_DIMENSIONS, EMBEDDING_SPACE } from "../embedding-client.js";
+import { prepareMemoryContext } from "../agent/episode-recall.js";
+import { EpisodeIndex } from "../agent/episode-index.js";
 
 const logger = createLogger('Gateway');
-
+const episodeIndex = new EpisodeIndex(path.join(paths.agentDir(), "episode-index.json"));
 export class Gateway {
   #sessionManager;
   #channels = [];
@@ -176,11 +179,16 @@ export class Gateway {
             {
               onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
               contextState: session.contextState,
-              refreshContext: input => {
-                const current = formatMemoryPrompt(memoryStore, memoryScopes);
-                replaceSystemContext(input, buildSystemPrompt(current, msg.sessionId));
-                console.log("[当前记忆]", selectMemories(memoryStore, memoryScopes)
-                  .map(row => ({ key: row.key, version: row.version, scope: row.scope })));
+              refreshContext: async input => {
+                const prepared = await prepareMemoryContext(memoryStore, memoryScopes, msg.text,
+                  { embed, dimensions: EMBEDDING_DIMENSIONS, space: EMBEDDING_SPACE },
+                  { index: episodeIndex });
+                replaceSystemContext(input, buildSystemPrompt(prepared.content, msg.sessionId));
+                console.log("[记忆召回]", { threshold: prepared.report.threshold,
+                  topK: prepared.report.topK, emptyReason: prepared.report.emptyReason,
+                  error: prepared.report.error });
+                console.table(prepared.report.candidates);
+                return prepared.report;
               }
             }
           );

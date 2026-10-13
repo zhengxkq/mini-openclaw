@@ -45,9 +45,12 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
         throw new AgentRunError("ROUND_LIMIT", `已达到 ${MAX_ROUNDS} 轮，本次任务未完成。`);
       }
 
-      await emit({ round, phase: "正在请求模型", draft: "", promptTokens: null });
+      await emit({ round, phase: "正在请求模型", draft: "", promptTokens: null, memoryReport: null });
       
-      await options.refreshContext?.(messages);
+      const memoryReport = await options.refreshContext?.(messages);
+      if (memoryReport) {
+        await emit({ round, phase: "记忆候选已筛选", memoryReport });
+      }
       const context = await buildModelContext(messages, {
         tools: toolDefinitions, maxInputBytes: options.maxInputBytes ?? 64000,
         summarize: summarizeHistory,
