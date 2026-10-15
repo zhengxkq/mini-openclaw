@@ -8,6 +8,7 @@ export const Permission = {
   NETWORK: "network",             // 网络请求
   REMINDER: "reminder",           // 设置提醒
   CALCULATE: "calculate",         // 数学计算
+  READ_DOCUMENTS: "read_documents", // 检索已导入的资料
 };
 
 // 每个工具需要哪些权限
@@ -20,6 +21,8 @@ export const toolPermissions = {
   list_reminders: [Permission.REMINDER],
   get_cost_summary: [],  // 不需要特殊权限
   web_search: [Permission.NETWORK],
+  web_search: [Permission.NETWORK],
+  search_documents: [Permission.READ_DOCUMENTS],
 };
 
 // 默认允许的权限（安全的操作）
@@ -29,7 +32,14 @@ export const defaultAllowedPermissions = new Set([
   Permission.READ_FILE,
 //   Permission.WRITE_FILE,
   Permission.NETWORK,
+  Permission.READ_DOCUMENTS,
 ]);
+
+// 结果来自外部、可能夹带指令的工具
+export const externalContentTools = new Set(["search_documents", "web_search", "read_file"]);
+
+// 会改变外部状态的工具
+export const sideEffectTools = new Set(["set_reminder", "write_file", "execute_shell"]);
 
 // 需要 HITL 审批的权限（不可逆操作）
 export const hitlPermissions = new Set([

@@ -1,5 +1,6 @@
 // client/src/components/Sidebar.jsx
 import { useChatStore } from "../store/chat.js";
+import { DocumentPanel } from "./DocumentPanel.jsx";
 
 export function Sidebar() {
   const { sessions, activeSessionId, createSession, setActiveSession } = useChatStore();
@@ -49,6 +50,8 @@ export function Sidebar() {
           </button>
         ))}
       </div>
+
+      <DocumentPanel />
 
       {/* 底部状态 */}
       <div className="p-3 border-t border-gray-700">

@@ -66,11 +66,11 @@ export async function embed(text) {
 
 
 
-// 本地批次上限 25，超量明确拒绝
+// 本地批次上限 10，超量明确拒绝
 export async function embedBatch(texts) {
-  if (!Array.isArray(texts) || texts.length < 1 || texts.length > 25 ||
+  if (!Array.isArray(texts) || texts.length < 1 || texts.length > 10 ||
       !Array.from(texts).every(text => typeof text === "string" && text.trim())) {
-    throw new AgentRunError("EMBEDDING_INPUT_INVALID", "本接口每批接受 1 到 25 条非空文字。");
+    throw new AgentRunError("EMBEDDING_INPUT_INVALID", "本接口每批接受 1 到 10 条非空文字。");
   }
   return requestEmbeddings(texts, texts.length);
 }

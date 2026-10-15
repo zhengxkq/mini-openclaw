@@ -5,13 +5,15 @@ export function ToolCallCard({ toolCall }) {
   const statusIcon = {
     running: "⚙️",
     done:    "✅",
-    error:   "❌"
+    error:   "❌",
+    blocked: "🛑"
   }[status] ?? "⚙️";
 
   const statusColor = {
     running: "border-yellow-400 bg-yellow-50",
     done:    "border-green-400 bg-green-50",
-    error:   "border-red-400 bg-red-50"
+    error:   "border-red-400 bg-red-50",
+    blocked: "border-orange-400 bg-orange-50"
   }[status] ?? "border-gray-300 bg-gray-50";
 
   return (
@@ -21,6 +23,9 @@ export function ToolCallCard({ toolCall }) {
         <span className="text-gray-700">{name}</span>
         {status === "running" && (
           <span className="ml-auto text-xs text-yellow-600 animate-pulse">执行中...</span>
+        )}
+        {status === "blocked" && (
+          <span className="ml-auto text-xs text-orange-600">读过外部资料，已暂停</span>
         )}
       </div>
       {args && Object.keys(args).length > 0 && (
