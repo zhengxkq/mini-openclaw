@@ -22,6 +22,7 @@ import { formatMemoryPrompt, selectMemories, replaceSystemContext } from "../age
 import { embed, EMBEDDING_DIMENSIONS, EMBEDDING_SPACE } from "../embedding-client.js";
 import { prepareMemoryContext } from "../agent/episode-recall.js";
 import { EpisodeIndex } from "../agent/episode-index.js";
+import { checkCitations } from "../agent/citations.js";
 
 const logger = createLogger('Gateway');
 const episodeIndex = new EpisodeIndex(path.join(paths.agentDir(), "episode-index.json"));
@@ -179,6 +180,7 @@ export class Gateway {
             {
               onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
               contextState: session.contextState,
+              checkCompletion: checkCitations,
               refreshContext: async input => {
                 const prepared = await prepareMemoryContext(memoryStore, memoryScopes, msg.text,
                   { embed, dimensions: EMBEDDING_DIMENSIONS, space: EMBEDDING_SPACE },

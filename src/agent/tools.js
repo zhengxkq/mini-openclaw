@@ -1,6 +1,8 @@
 import { ReminderStore } from "./reminder-store.js";
 import { costTracker } from "../observability/cost-tracker.js";
 import { tavily } from "@tavily/core";
+import { searchDocuments } from "./document-search.js";
+import { documentStore, documentIndex, documentEmbedding } from "./document-runtime.js";
 
 const reminderStore = new ReminderStore();
 // src/agent/tools.js
@@ -120,6 +122,23 @@ export const toolDefinitions = [
   {
     type: "function",
     function: {
+      name: "search_documents",
+      description: "在用户导入的资料（Markdown/txt）里检索相关片段。回答资料里的问题前先调用它",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "要在资料里查找的问题或关键词"
+          }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "get_cost_summary",
       description: "查询今日 API 费用统计和使用情况",
       parameters: {
@@ -202,6 +221,10 @@ const toolImplementations = {
   get_cost_summary() {
     const summary = costTracker.getTodaySummary();
     return JSON.stringify(summary);
+  },
+  async search_documents({ query }) {
+    const found = await searchDocuments(documentStore, documentIndex, query, documentEmbedding);
+    return JSON.stringify(found);
   },
   execute_shell() {
     return JSON.stringify({
