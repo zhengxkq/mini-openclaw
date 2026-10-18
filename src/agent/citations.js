@@ -35,6 +35,8 @@ export function searchedRefs(messages) {
 }
 
 export function checkCitations({ answer, messages }) {
+    const didSearch = messages.some(message => message.role === "assistant" &&
+        message.tool_calls?.some(call => call.function?.name === "search_documents"));
     const searched = searchedRefs(messages);
     const cited = citedRefs(answer);
     const unknown = cited.filter(ref => !searched.has(ref));
@@ -44,6 +46,14 @@ export function checkCitations({ answer, messages }) {
                 "只能原样使用结果中的 ref；没有依据的句子请删掉。"
         };
     }
+    
+    if (didSearch && searched.size === 0 && !answer.includes("资料不足")) {
+        return {
+            action: "continue", followUp: "本次 search_documents 没有提供可用出处。" +
+                "请明确说明资料不足，不要编造事实，也不要添加引用。"
+        };
+    }
+
     if (searched.size > 0 && cited.length === 0 && !answer.includes("资料不足")) {
         return {
             action: "continue", followUp: "本次查到了资料，但回答没有标注出处。" +
