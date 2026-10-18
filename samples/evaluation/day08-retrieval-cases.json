@@ -1,0 +1,31 @@
+[
+  {
+    "id": "inc-204",
+    "query": "INC-204 的处理动作是什么？",
+    "expected": {
+      "name": "pinecone-incidents.md",
+      "heading": "松果项目故障索引 > INC-204：发布后缓存没有刷新"
+    }
+  },
+  {
+    "id": "inc-2047",
+    "query": "INC-2047 的处理动作是什么？",
+    "expected": {
+      "name": "pinecone-incidents.md",
+      "heading": "松果项目故障索引 > INC-2047：缓存监控误报"
+    }
+  },
+  {
+    "id": "restore-image",
+    "query": "服务出问题怎样恢复上一版",
+    "expected": {
+      "name": "pinecone-incidents.md",
+      "heading": "松果项目故障索引 > INC-305：镜像回滚"
+    }
+  },
+  {
+    "id": "missing-code",
+    "query": "INC-9999 的处理动作是什么？",
+    "expected": null
+  }
+]

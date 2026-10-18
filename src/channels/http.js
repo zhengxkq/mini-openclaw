@@ -6,9 +6,11 @@ import { AgentRunError } from "../agent/run-policy.js";
 import { documentStore, documentIndex, documentEmbedding } from "../agent/document-runtime.js";
 import { chunkDocument } from "../agent/document-chunker.js";
 import { resolveSource } from "../agent/citations.js";
+import { searchDocuments } from "../agent/document-search.js";
 
 const documentErrorStatus = {
     INVALID_DOCUMENT: 400,
+    INVALID_QUERY: 400,
     INVALID_CITATION: 400,
     DOCUMENT_NOT_FOUND: 404,
     SOURCE_NOT_FOUND: 404,
@@ -221,6 +223,16 @@ export class HttpChannel extends BaseChannel {
                 return sendDocumentError(reply, error);
             }
         });
+
+        fastify.get("/api/documents/search", async (req, reply) => {
+            try {
+                return await searchDocuments(documentStore, documentIndex, req.query.query, documentEmbedding,
+                    { mode: req.query.mode ?? "hybrid", debug: true });
+            } catch (error) {
+                return sendDocumentError(reply, error);
+            }
+        });
+
         fastify.get("/api/documents/sources/:ref", async (req, reply) => {
             try {
                 return resolveSource(documentStore, req.params.ref);
