@@ -46,7 +46,7 @@ export function checkCitations({ answer, messages }) {
                 "只能原样使用结果中的 ref；没有依据的句子请删掉。"
         };
     }
-    
+
     if (didSearch && searched.size === 0 && !answer.includes("资料不足")) {
         return {
             action: "continue", followUp: "本次 search_documents 没有提供可用出处。" +
