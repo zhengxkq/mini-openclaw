@@ -33,6 +33,15 @@ const skillsLoader = new SkillsLoader();
 const logger = createLogger('AgentLoop');
 
 export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn, options = {}) {
+
+    const tools = options.tools ?? toolDefinitions;
+    const maxRounds = options.maxRounds ?? MAX_ROUNDS;
+    const createCompletion = options.createCompletion ??
+        (request => client.chat.completions.create(request));
+    if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_ROUNDS) {
+        throw new AgentRunError("INVALID_RUN_OPTIONS", "轮数上限必须是 1 到 10 的整数。");
+    }
+
     const emit = async event => { await options.onEvent?.(event); };
     let round = 0;
     let repairs = 0;
@@ -46,8 +55,8 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
         while (true) {
             round++;
 
-            if (round > MAX_ROUNDS) {
-                throw new AgentRunError("ROUND_LIMIT", `已达到 ${MAX_ROUNDS} 轮，本次任务未完成。`);
+            if (round > maxRounds) {
+                throw new AgentRunError("ROUND_LIMIT", `已达到 ${maxRounds} 轮，本次任务未完成。`);
             }
 
             await emit({ round, phase: "正在请求模型", draft: "", promptTokens: null, memoryReport: null });
@@ -57,7 +66,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
                 await emit({ round, phase: "记忆候选已筛选", memoryReport });
             }
             const context = await buildModelContext(messages, {
-                tools: toolDefinitions, maxInputBytes: options.maxInputBytes ?? 64000,
+                tools, maxInputBytes: options.maxInputBytes ?? 64000,
                 summarize: summarizeHistory,
                 state: options.contextState
             });
@@ -72,16 +81,16 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
             })));
 
             console.log("[消息和工具说明的字节数]", Buffer.byteLength(
-                JSON.stringify({ messages: context.messages, tools: toolDefinitions }), "utf8"
+                JSON.stringify({ messages: context.messages, tools }), "utf8"
             ));
 
             // 全程用流式，通过 finish_reason 判断走哪条路
-            const stream = await client.chat.completions.create({
+            const stream = await createCompletion({
                 model: MODEL,
                 messages: context.messages,
-                tools: toolDefinitions,
+                ...(tools.length ? { tools } : {}),
                 stream: true,
-                stream_options: { include_usage: true }  // ← 加这个才能拿到 usage
+                stream_options: { include_usage: true }
             });
 
             // 需要自己从流里「拼」出完整的 assistant 消息
@@ -91,9 +100,11 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
             let usage = null;
 
             for await (const chunk of stream) {
+                console.log('reponse chunk:', chunk);
                 if (chunk.usage) console.log("[供应商输入 Token]", chunk.usage.prompt_tokens ?? "未返回");
                 if (chunk.usage) usage = chunk.usage;
                 const choice = chunk.choices?.[0];
+                console.log('reponse choice:', choice)
                 if (!choice) continue;
 
                 const delta = choice.delta;
@@ -108,6 +119,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
 
                 // 工具调用内容——流式里是分块传来的，需要手动拼接
                 if (delta?.tool_calls) {
+                    console.log('respose delta toll_calls', delta.tool_calls);
                     for (const tc of delta.tool_calls) {
                         collectToolDelta(toolCallsMap, tc);
                     }
@@ -141,7 +153,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
                 }));
 
                 await emit({ round, phase: "正在检查工具请求" });
-                const prepared = prepareToolCalls(toolCalls, toolDefinitions);
+                const prepared = prepareToolCalls(toolCalls, tools);
                 await emit({ round, phase: "正在执行工具" });
                 // 把 AI 的工具调用消息加入历史
                 messages.push({

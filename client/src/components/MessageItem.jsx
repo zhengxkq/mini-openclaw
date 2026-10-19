@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import { ToolCallCard } from "./ToolCallCard.jsx";
 import { RunProgress } from "./RunProgress.jsx";
 import { CitationSource } from "./CitationSource.jsx";
+import { TaskProgress } from "./TaskProgress.jsx";
+import { toolCallKey } from "../store/run-state.js";
 
 const CITATION = /\[(doc-[0-9a-f]{8}-v\d+-c\d+)\]/g;
 
@@ -36,10 +38,12 @@ export function MessageItem({ message }) {
 
             {/* 消息内容 */}
             <div className={`max-w-[70%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
-                {!isUser && <RunProgress run={message.run} />}
+                {!isUser && (message.run?.runId
+                    ? <TaskProgress run={message.run} />
+                    : <RunProgress run={message.run} />)}
                 {/* 工具调用卡片 */}
                 {toolCalls?.map(tc => (
-                    <ToolCallCard key={tc.id} toolCall={tc} />
+                    <ToolCallCard key={toolCallKey(tc)} toolCall={tc} />
                 ))}
 
                 {/* 文字内容 */}
