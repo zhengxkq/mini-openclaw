@@ -23,6 +23,8 @@ import { embed, EMBEDDING_DIMENSIONS, EMBEDDING_SPACE } from "../embedding-clien
 import { prepareMemoryContext } from "../agent/episode-recall.js";
 import { EpisodeIndex } from "../agent/episode-index.js";
 import { checkCitations } from "../agent/citations.js";
+import { RunRegistry } from "../runs/run-registry.js";
+import { RunStore } from "../runs/run-store.js";
 
 const logger = createLogger('Gateway');
 const episodeIndex = new EpisodeIndex(path.join(paths.agentDir(), "episode-index.json"));
@@ -33,6 +35,7 @@ export class Gateway {
     #heartbeat;
     #agentDir;
     #sandbox;
+    #runs;
 
 
     constructor() {
@@ -41,9 +44,17 @@ export class Gateway {
         this.#sandbox = new Sandbox();
 
         ensureDataDirs(); // 启动时确保所有目录存在
+        
+        this.#runs = new RunRegistry({ store: new RunStore(paths.runsDir()) });
+        const interrupted = this.#runs.closeInterrupted();
+        if (interrupted) console.log(`[Runs] 上次退出时未结束的运行：${interrupted} 个，已标记为中断`);
+
         this.#agentDir = paths.agentDir();
         fs.mkdirSync(this.#agentDir, { recursive: true });
         console.log("🦞 Gateway 初始化完成");
+    }
+    get runs() {
+        return this.#runs;
     }
 
     registerChannel(channel) {
@@ -100,6 +111,7 @@ export class Gateway {
             });
 
             let pusher;
+            let run;
             try {
                 // 读取当前有效记忆
                 const memoryScopes = ["agent:default", `session:${msg.sessionId}`];
@@ -122,6 +134,17 @@ export class Gateway {
 
                 const isHttp = msg.channelName === "http";
 
+                const mode = shouldUseMultiAgent(msg.text) ? "multi" : "single";
+                run = this.#runs.start({ sessionId: msg.sessionId, request: msg.text, mode });
+                const publish = async payload => {
+                    const record = this.#runs.record(run, payload);
+                    if (isHttp) await sourceChannel.sendRunRecord(msg.sessionId, record);
+                };
+                const settle = async outcome => {
+                    const record = this.#runs.finish(run, outcome);
+                    if (record && isHttp) await sourceChannel.sendRunRecord(msg.sessionId, record);
+                };
+
 
                 if (isHttp) {
                     // HTTP 用 SSE chunk 推送，实时打字机效果
@@ -139,11 +162,11 @@ export class Gateway {
                 }
 
                 // ── Agent 执行 ────────────────────────────────────
-                const spanAgent = tracer.startSpan("agent_loop", { mode: shouldUseMultiAgent(msg.text) ? "multi" : "single" });
+                const spanAgent = tracer.startSpan("agent_loop", { mode });
 
                 let reply;
 
-                if (shouldUseMultiAgent(msg.text)) {
+                if (mode === "multi") {
                     console.log("[Gateway] 启动多 Agent 模式");
                     await sourceChannel?.sendTyping?.(msg.sessionId);
 
@@ -152,11 +175,11 @@ export class Gateway {
                         return pusher?.push(chunk);
                     }, {
                         systemPrompt: messages[0].content,
+                        run,
                         executeToolFn: (toolName, args) => this.#sandbox.executeTool(
                             toolName, args, msg.sessionId, executeTool
                         ),
-                        onEvent: isHttp
-                            ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
+                        onEvent: event => publish({ type: "run_event", event }),
                         onToolCall: async event => {
                             if (event.status === "running") {
                                 this.#sessionManager.appendTranscript(session, {
@@ -164,7 +187,7 @@ export class Gateway {
                                     runId: event.runId, taskId: event.taskId
                                 });
                             }
-                            if (isHttp) await sourceChannel.sendToolCall(msg.sessionId, event);
+                            await publish({ type: "tool_call", ...event });
                         },
                         refreshContext: async (input, task) => {
                             const prepared = await prepareMemoryContext(memoryStore, memoryScopes, task,
@@ -188,6 +211,7 @@ export class Gateway {
                     });
                     if (outcome.status !== "succeeded") {
                         await pusher?.flush();
+                        await settle({ status: outcome.status, answer: outcome.answer });
                         throw new AgentRunError(
                             outcome.status === "partial" ? "MULTI_PARTIAL" : "MULTI_FAILED",
                             "各项结果已保留；本次任务未全部通过，请查看失败项后重新发起需要的任务。"
@@ -212,15 +236,14 @@ export class Gateway {
                                 });
                                 console.log(`\n  [工具] ${name}(${JSON.stringify(args)})`);
                             }
-                            if (isHttp) {
-                                await sourceChannel?.sendToolCall(msg.sessionId, { id, name, args, status });
-                            }
+                            await publish({ type: "tool_call", id, name, args, status });
                         },
                         (toolName, args) => this.#sandbox.executeTool(
                             toolName, args, msg.sessionId, executeTool
                         ),
                         {
-                            onEvent: isHttp ? event => sourceChannel.sendRunEvent(msg.sessionId, event) : undefined,
+                            run,
+                            onEvent: isHttp ? event => publish({ type: "run_event", event }) : undefined,
                             contextState: session.contextState,
                             checkCompletion: checkCitations,
                             refreshContext: async input => {
@@ -243,6 +266,7 @@ export class Gateway {
                 tracer.endSpan(spanAgent, { replyLength: reply.length });
                 // 把剩余内容全部发出去
                 await pusher?.flush();
+                await settle({ status: "succeeded", answer: reply });
 
                 session.messages.push({ role: "user", content: msg.text });
                 session.messages.push({ role: "assistant", content: reply });
@@ -286,6 +310,11 @@ export class Gateway {
                     await sourceChannel?.sendError(msg.sessionId, `${code}：${message}`);
                 } else {
                     await sourceChannel?.send(msg.sessionId, `❌ ${code}：${message}`);
+                }
+
+                const finished = run && this.#runs.fail(run, error);
+                if (finished && msg.channelName === "http") {
+                    await sourceChannel?.sendRunRecord(msg.sessionId, finished);
                 }
 
                 this.#sessionManager.appendTranscript(session, {
@@ -466,7 +495,7 @@ function createStreamPusher(sessionId, channel) {
 // ─── 启动入口：根据环境决定用哪个 Channel ─────────────────────
 const gateway = new Gateway();
 const { HttpChannel } = await import("../channels/http.js");
-const http = new HttpChannel(process.env.HTTP_PORT ?? 3000);
+const http = new HttpChannel(process.env.HTTP_PORT ?? 3000, { runs: gateway.runs });
 gateway.registerChannel(http);
 
 if (process.env.TELEGRAM_TOKEN) {

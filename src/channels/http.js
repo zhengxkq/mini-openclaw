@@ -38,10 +38,12 @@ export class HttpChannel extends BaseChannel {
     #port;
     #sseClients = new Map();
     #messageQueue = new Map();
+    #runs;
 
-    constructor(port = 3000) {
+    constructor(port = 3000, { runs } = {}) {
         super("http");  // ← 调用父类构造函数，设置 this.name = "http"
         this.#port = port;
+        this.#runs = runs;
         this.#fastify = Fastify({ logger: false });
     }
 
@@ -96,8 +98,8 @@ export class HttpChannel extends BaseChannel {
         this.#writeSSE(sessionId, { type: "tool_call", ...toolCall });
     }
 
-    async sendRunEvent(sessionId, event) {
-        this.#writeSSE(sessionId, { type: "run_event", event });
+    async sendRunRecord(sessionId, record) {
+        this.#writeSSE(sessionId, record);
     }
 
     async sendDone(sessionId) {
@@ -160,8 +162,13 @@ export class HttpChannel extends BaseChannel {
                 "X-Accel-Buffering": "no"
             });
 
+            // 先补发留档记录，再登记为实时接收方；两步之间没有 await，不会漏掉或插进别的事件。
+            const history = this.#runs?.recordsFor(fullSessionId) ?? [];
+            for (const record of history) {
+                reply.raw.write(`data: ${JSON.stringify(record)}\n\n`);
+            }
             this.#sseClients.set(fullSessionId, reply.raw);
-            console.log(`[HTTP] SSE 连接建立: ${fullSessionId}`);
+            console.log(`[HTTP] SSE 连接建立: ${fullSessionId}，补发 ${history.length} 条运行记录`);
 
             // 发送缓存的消息
             const queued = this.#messageQueue.get(fullSessionId) ?? [];
@@ -175,7 +182,7 @@ export class HttpChannel extends BaseChannel {
                 if (!reply.raw.destroyed) {
                     reply.raw.write(": heartbeat\n\n");
                 }
-            }, 15000);
+            }, 5000);
 
             req.raw.on("close", () => {
                 clearInterval(heartbeat);
@@ -185,6 +192,17 @@ export class HttpChannel extends BaseChannel {
 
             await new Promise(() => { });
         });
+
+        fastify.post("/api/runs/:runId/cancel", async (req, reply) => {
+            const sessionId = req.body?.sessionId;
+            if (!sessionId) return reply.code(400).send({ error: "缺少 sessionId" });
+            const accepted = this.#runs?.cancel(req.params.runId, `http-${sessionId}`) ?? false;
+            if (!accepted) {
+                return reply.code(404).send({ code: "RUN_NOT_ACTIVE", error: "这个运行已经结束，或不属于当前会话。" });
+            }
+            return reply.code(202).send({ runId: req.params.runId, status: "stopping" });
+        });
+
 
         fastify.get("/api/sessions", async () => {
             const sessions = [...this.#sseClients.keys()].map(id => ({

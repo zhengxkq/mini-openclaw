@@ -6,7 +6,7 @@
     "scripts": {
         "dev": "dotenv -e .env -e .env.development -e .env.local -- node src/gateway/index.js",
         "start": "dotenv -e .env -e .env.production -- node src/gateway/index.js",
-        "test": "dotenv -e .env -e .env.local -- node --test src/gateway/lane-queue.test.js src/gateway/session-manager.test.js src/agent/skills-loader.test.js src/agent/memory-governance.test.js src/agent/document-library.test.js src/agent/document-quality.test.js src/agent/task-plan.test.js src/agent/task-runner.test.js src/agent/multi-agent.test.js client/src/store/run-state.test.js"
+        "test": "dotenv -e .env -e .env.local -- node --test src/gateway/lane-queue.test.js src/gateway/session-manager.test.js src/agent/skills-loader.test.js src/agent/memory-governance.test.js src/agent/document-library.test.js src/agent/document-quality.test.js src/agent/task-plan.test.js src/agent/task-runner.test.js src/agent/multi-agent.test.js src/runs/run-control.test.js src/runs/run-store.test.js client/src/store/run-state.test.js client/src/hooks/silence-watch.test.js"
     },
     "keywords": [],
     "author": "",

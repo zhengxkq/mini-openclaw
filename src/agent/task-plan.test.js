@@ -12,13 +12,13 @@ test("9.2 两条故障按顺序获得程序分配的身份", () => {
   }));
   console.table(plan.tasks);
   assert.deepEqual(plan.tasks, [
-    { id: "t1", task: "查 INC-204 的负责人和动作" },
-    { id: "t2", task: "查 INC-2047 的负责人和动作" }
+    { id: "t1", task: "查 INC-204 的负责人和动作", dependsOn: [] },
+    { id: "t2", task: "查 INC-2047 的负责人和动作", dependsOn: [] }
   ]);
   assert.equal(plan.summary_instruction, "按计划顺序保留各项结果与出处");
 });
 
-test("9.2 空项、重复项、超过五项、明确依赖与过长任务都拒绝", () => {
+test("9.2 空项、重复项、超过五项、依赖自己或后项与过长任务都拒绝", () => {
   const invalid = [
     { tasks: [] },
     { tasks: [{ task: " " }] },
@@ -42,4 +42,27 @@ test("9.2 代码围栏可以剥掉，解释文字和坏JSON不能混进计划", 
     error => error.code === "INVALID_PLAN");
   assert.throws(() => parseTaskPlan("{坏 JSON"),
     error => error.code === "INVALID_PLAN");
+});
+
+
+test("10.4 依赖只能指向前面的任务，指向自己、后项、不存在或重复都拒绝", () => {
+  const plan = parseTaskPlan(JSON.stringify({ tasks: [
+    { task: "计算 123+456" },
+    { task: "把 t1 的结果乘以 2", dependsOn: ["t1"] },
+    { task: "计算 10+20" }
+  ] }));
+  console.table(plan.tasks);
+  assert.deepEqual(plan.tasks.map(task => task.dependsOn), [[], ["t1"], []]);
+
+  const invalid = [
+    [{ task: "A", dependsOn: ["t1"] }],
+    [{ task: "A", dependsOn: ["t2"] }, { task: "B" }],
+    [{ task: "A" }, { task: "B", dependsOn: ["t9"] }],
+    [{ task: "A" }, { task: "B", dependsOn: ["t1", "t1"] }],
+    [{ task: "A" }, { task: "B", dependsOn: "t1" }]
+  ];
+  for (const tasks of invalid) {
+    assert.throws(() => parseTaskPlan(JSON.stringify({ tasks })),
+      error => error.code === "INVALID_PLAN");
+  }
 });

@@ -1,7 +1,9 @@
 // client/src/store/chat.js
 import { create } from "zustand";
 import { mergeRunEvent, toolCallKey } from "./run-state.js";
+import { loadSavedSessions, saveSessions } from "./saved-sessions.js";
 
+const saved = loadSavedSessions();
 // 消息的数据结构：
 // {
 //   id: string,
@@ -22,8 +24,8 @@ import { mergeRunEvent, toolCallKey } from "./run-state.js";
 
 export const useChatStore = create((set, get) => ({
     // ── 状态 ────────────────────────────────────────────────
-    sessions: [],          // 会话列表 [{ sessionId, title, lastMessage }]
-    activeSessionId: null, // 当前选中的会话 ID
+    sessions: saved.sessions ?? [],               // 会话列表 [{ sessionId, title, lastMessage }]
+    activeSessionId: saved.activeSessionId ?? null, // 当前选中的会话 ID
     messages: {},          // sessionId → Message[]
     isConnected: false,    // SSE 是否连接
     // 获取或创建默认会话
@@ -172,5 +174,73 @@ export const useChatStore = create((set, get) => ({
 
     getMessages: (sessionId) => {
         return get().messages[sessionId] ?? [];
+    },
+
+    messageIdForRun: (sessionId, runId) =>
+        (get().messages[sessionId] ?? []).find(m => m.run?.runId === runId)?.id ?? null,
+
+        // 刷新后补发的 run_started：重建“用户这一问 + 助手这一答”两条消息。
+    openRunMessage: (sessionId, record) => {
+        const user = {
+            id: crypto.randomUUID(), role: "user", content: record.request,
+            isStreaming: false, toolCalls: [], timestamp: record.at
+        };
+        const assistant = {
+            id: crypto.randomUUID(), role: "assistant", content: "", isStreaming: true,
+            toolCalls: [], timestamp: record.at,
+            run: { runId: record.runId, mode: record.mode, tasks: {} }
+        };
+        set(state => {
+            const list = state.messages[sessionId] ?? [];
+            // 断线期间发出的问题本页已经显示过，补发时不再重复一条。
+            const shown = list.at(-1)?.role === "user" && list.at(-1).content === record.request;
+            return {
+                messages: {
+                    ...state.messages,
+                    [sessionId]: [...list, ...(shown ? [] : [user]), assistant]
+                }
+            };
+        });
+        return assistant.id;
+    },
+
+    // 同一条记录可能先实时收到，重连时又补发一次；按 seq 只处理一次。
+    acceptRecord: (sessionId, messageId, seq) => {
+        if (!Number.isInteger(seq)) return true;
+        const message = (get().messages[sessionId] ?? []).find(m => m.id === messageId);
+        if (!message) return true;
+        if (seq <= (message.lastSeq ?? 0)) return false;
+        set(state => ({
+            messages: {
+                ...state.messages,
+                [sessionId]: state.messages[sessionId].map(m =>
+                    m.id === messageId ? { ...m, lastSeq: seq } : m)
+            }
+        }));
+        return true;
+    },
+
+    finishRun: (sessionId, messageId, record) => {
+        set(state => ({
+            messages: {
+                ...state.messages,
+                [sessionId]: (state.messages[sessionId] ?? []).map(m => m.id !== messageId ? m : {
+                    ...m,
+                    isStreaming: false,
+                    content: m.content || (record.answer ?? `❌ ${record.code}：${record.message}`),
+                    run: mergeRunEvent(m.run, {
+                        runId: record.runId, status: record.status, usage: record.usage
+                    })
+                })
+            }
+        }));
     }
+    
 }));
+
+
+useChatStore.subscribe((state, previous) => {
+    if (state.sessions !== previous.sessions || state.activeSessionId !== previous.activeSessionId) {
+        saveSessions(state);
+    }
+});

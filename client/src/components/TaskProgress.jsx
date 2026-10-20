@@ -1,19 +1,12 @@
 import { RunProgress } from "./RunProgress.jsx";
-
-const statusNames = {
-    queued: "等待执行",
-    running: "执行中",
-    succeeded: "已接受",
-    partial: "部分成功，仍有失败",
-    failed: "失败"
-};
+import { statusNames } from "../store/run-labels.js";
 
 export function TaskProgress({ run }) {
     if (!run) return null;
     const tasks = Object.values(run.tasks ?? {}).sort((a, b) =>
         Number(a.taskId.slice(1)) - Number(b.taskId.slice(1)));
     const succeeded = tasks.filter(task => task.status === "succeeded").length;
-    const failed = tasks.filter(task => task.status === "failed").length;
+    const failed = tasks.filter(task => !["queued", "running", "succeeded"].includes(task.status)).length;
 
     return <section aria-label="子任务进度" className="my-2 w-full space-y-2 text-sm">
         <div className="rounded border border-gray-200 bg-gray-50 p-3">
@@ -22,7 +15,7 @@ export function TaskProgress({ run }) {
             </p>
             {run.phase && <p className="text-xs text-gray-600">{run.phase}</p>}
             {tasks.length > 0 && <p className="mt-1 text-xs text-gray-600">
-                共 {tasks.length} 项 · 已接受 {succeeded} 项 · 失败 {failed} 项
+                共 {tasks.length} 项 · 已接受 {succeeded} 项 · 未完成 {failed} 项
             </p>}
         </div>
 

@@ -1,6 +1,7 @@
 // client/src/hooks/useSSE.js
 import { useEffect, useRef, useCallback } from "react";
 import { useChatStore } from "../store/chat.js";
+import { watchSilence } from "./silence-watch.js";
 
 export function useSSE(sessionId) {
     const eventSourceRef = useRef(null);
@@ -23,15 +24,15 @@ export function useSSE(sessionId) {
         // 用 fetch + ReadableStream 实现 SSE
         // 比 EventSource 更灵活，支持自定义 header
         const controller = new AbortController();
+        // 开发代理在后端退出后可能既不结束也不报错；连心跳都收不到时，主动断开并重连。
+        let silent = false;
+        const watch = watchSilence(() => { silent = true; controller.abort(); });
 
         fetch(`/api/chat/stream?sessionId=${sessionId}`, {
             signal: controller.signal
         }).then(async (response) => {
             console.log("[useSSE] SSE 响应状态 :", response.status); // ← 加这行
-            if (!response.ok) {
-                console.error("[SSE] 连接失败:", response.status);
-                return;
-            }
+            if (!response.ok) throw new Error(`SSE 连接失败：${response.status}`);
 
             store.isConnected = true;
             const reader = response.body.getReader();
@@ -41,6 +42,7 @@ export function useSSE(sessionId) {
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+                watch.touch();
 
                 buffer += decoder.decode(value, { stream: true });
 
@@ -61,18 +63,19 @@ export function useSSE(sessionId) {
                     }
                 }
             }
+            // 服务端主动关闭（例如后端重启）同样交给下面重连；重连后服务端会先补发运行记录。
+            throw new Error("SSE 连接被服务端关闭");
         }).catch(e => {
-            if (e.name !== "AbortError") {
-                console.error("[SSE] 错误:", e);
+            if (e.name !== "AbortError" || silent) {
                 // 3 秒后重连
                 setTimeout(() => {
                     reconnectRef.current?.();
                 }, 3000);
             }
-        });
+        }).finally(() => watch.stop());
 
         // 保存 controller 用于断开
-        eventSourceRef.current = { close: () => controller.abort() };
+        eventSourceRef.current = { close: () => { watch.stop(); controller.abort(); } };
     }, [sessionId]);
 
     useEffect(() => {
@@ -84,11 +87,32 @@ export function useSSE(sessionId) {
             eventSourceRef.current?.close();
         };
     }, [connect]);
+
+    return { reconnect: useCallback(() => reconnectRef.current?.(), []) };
 }
 
 // 处理各类 SSE 事件
 export function handleEvent(event, sessionId, store, currentMsgIdRef) {
+    // 带 runId 的记录按运行编号找消息，不依赖“当前正在写哪条”。
+    const runId = event.runId ?? event.event?.runId;
+    if (runId) {
+        currentMsgIdRef.current = store.messageIdForRun(sessionId, runId) ??
+            (event.type === "run_started"
+                ? store.openRunMessage(sessionId, event)
+                : currentMsgIdRef.current);
+        if (!store.acceptRecord(sessionId, currentMsgIdRef.current, event.seq)) return;
+    }
+
     switch (event.type) {
+        case "run_started":
+            break;
+        case "run_finished": {
+            // 失败时错误提示先到，已经结束了“当前消息”；按运行编号找回这条消息。
+            const messageId = store.messageIdForRun(sessionId, event.runId) ?? currentMsgIdRef.current;
+            if (messageId) store.finishRun(sessionId, messageId, event);
+            if (messageId === currentMsgIdRef.current) currentMsgIdRef.current = null;
+            break;
+        }
         case "typing":
             // 还没开始输出时，创建一个空的 AI 消息占位
             if (!currentMsgIdRef.current) {
