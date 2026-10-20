@@ -73,7 +73,10 @@ export async function buildModelContext(messages, options = {}) {
         state.key = key;
         state.summary = text;
       }
-    } catch { /* 摘要失败时继续使用已选择的最近历史 */ }
+    } catch (error) {
+      // 摘要失败可以降级为只用最近历史；停止信号不能被吞掉。
+      if (options.signal?.aborted) throw error;
+    }
   }
   return { messages: selected, report: { summaryUsed, messageCount: selected.length, removedTurns: turns.length - kept.length, inputBytes: inputBytes(selected, tools), maxInputBytes: limit } };
 }

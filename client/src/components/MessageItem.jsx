@@ -6,6 +6,7 @@ import { ToolCallCard } from "./ToolCallCard.jsx";
 import { RunProgress } from "./RunProgress.jsx";
 import { CitationSource } from "./CitationSource.jsx";
 import { TaskProgress } from "./TaskProgress.jsx";
+import { RunFooter } from "./RunFooter.jsx";
 import { toolCallKey } from "../store/run-state.js";
 
 const CITATION = /\[(doc-[0-9a-f]{8}-v\d+-c\d+)\]/g;
@@ -38,9 +39,9 @@ export function MessageItem({ message }) {
 
             {/* 消息内容 */}
             <div className={`max-w-[70%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
-                {!isUser && (message.run?.runId
+                {!isUser && (message.run?.mode === "multi"
                     ? <TaskProgress run={message.run} />
-                    : <RunProgress run={message.run} />)}
+                    : message.run?.round !== undefined && <RunProgress run={message.run} />)}
                 {/* 工具调用卡片 */}
                 {toolCalls?.map(tc => (
                     <ToolCallCard key={toolCallKey(tc)} toolCall={tc} />
@@ -69,6 +70,8 @@ export function MessageItem({ message }) {
                         )}
                     </div>
                 )}
+                {!isUser && <RunFooter run={message.run} />}
+
                 {citation && (
                     <CitationSource key={citation} citation={citation} onClose={() => setCitation(null)} />
                 )}

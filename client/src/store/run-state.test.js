@@ -212,3 +212,57 @@ test("9.4 SSE 分发保留归属，done 不把部分成功改成成功", t => {
     assert.deepEqual(read().toolCalls.map(call => call.taskId), ["t1", "t2"]);
     assert.ok(read().toolCalls.every(call => call.runId === runId));
 });
+
+
+test("10.3 刷新后按记录重建，同一条记录补发两次也只处理一次", t => {
+    const previous = useChatStore.getState();
+    const sessionId = "day10-ui";
+    useChatStore.setState({ sessions: [], activeSessionId: sessionId, messages: { [sessionId]: [] } });
+    t.after(() => useChatStore.setState(previous, true));
+    const store = useChatStore.getState();
+    const ref = { current: null };
+    const runId = "11111111-1111-4111-8111-111111111111";
+    const records = [
+        { type: "run_started", runId, seq: 1, at: "2026-10-19T10:00:00Z", mode: "multi", request: "分别查 INC-204 和 INC-2047" },
+        { type: "run_event", runId, seq: 2, event: { runId, mode: "multi", taskId: "t1", task: "查 INC-204", status: "running" } },
+        { type: "run_event", runId, seq: 3, event: { runId, mode: "multi", taskId: "t1", status: "succeeded", answer: "小林 [doc-00000001-v1-c0]" } },
+        { type: "tool_call", runId, seq: 4, id: "c1", name: "search_documents", status: "done", taskId: "t1" }
+    ];
+
+    for (const record of records) handleEvent(record, sessionId, store, ref);
+    for (const record of records) handleEvent(record, sessionId, store, ref);
+    let messages = useChatStore.getState().messages[sessionId];
+    console.table(messages.map(({ role, content, isStreaming, lastSeq }) => ({ role, content, isStreaming, lastSeq })));
+    assert.deepEqual(messages.map(message => message.role), ["user", "assistant"]);
+    assert.equal(messages[0].content, "分别查 INC-204 和 INC-2047");
+    assert.equal(messages[1].run.tasks.t1.status, "succeeded");
+    assert.equal(messages[1].toolCalls.length, 1);
+    assert.equal(messages[1].isStreaming, true);
+
+    ref.current = null;
+    handleEvent({ type: "run_event", event: { runId, mode: "multi", taskId: "t2", draft: "INC-2047 的" } }, sessionId, store, ref);
+    handleEvent({ type: "run_finished", runId, seq: 5, status: "cancelled", code: "RUN_CANCELLED", message: "你已停止本次运行。", usage: { used: 3, limit: 20, byOperation: {} } }, sessionId, store, ref);
+    handleEvent(records[1], sessionId, store, ref);
+    messages = useChatStore.getState().messages[sessionId];
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1].run.tasks.t2.draft, "INC-2047 的");
+    assert.equal(messages[1].run.tasks.t1.status, "succeeded");
+    assert.equal(messages[1].run.status, "cancelled");
+    assert.equal(messages[1].isStreaming, false);
+    assert.equal(messages[1].content, "❌ RUN_CANCELLED：你已停止本次运行。");
+});
+
+test("10.3 断线期间发出的问题，补发时不重复显示", t => {
+    const previous = useChatStore.getState();
+    const sessionId = "day10-offline";
+    useChatStore.setState({ sessions: [], activeSessionId: sessionId, messages: { [sessionId]: [] } });
+    t.after(() => useChatStore.setState(previous, true));
+    const store = useChatStore.getState();
+    store.addUserMessage(sessionId, "请慢慢回答第三次");
+    const runId = "22222222-2222-4222-8222-222222222222";
+    handleEvent({ type: "run_started", runId, seq: 1, at: "2026-10-19T10:00:00Z", mode: "single", request: "请慢慢回答第三次" },
+        sessionId, store, { current: null });
+    const messages = useChatStore.getState().messages[sessionId];
+    assert.deepEqual(messages.map(message => message.role), ["user", "assistant"]);
+    assert.equal(messages[1].run.runId, runId);
+});
