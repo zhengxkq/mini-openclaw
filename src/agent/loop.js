@@ -6,7 +6,6 @@ import { AgentRunError, prepareToolCalls, assertToolResult, assertVerdict, sideE
 import { externalContentTools } from "./permissions.js";
 import { toolDefinitions, executeTool } from "./tools.js";
 import { SkillsLoader } from "./skills-loader.js";
-import { costTracker } from "../observability/cost-tracker.js";
 import { createLogger } from "../observability/logger.js";
 
 
@@ -19,11 +18,7 @@ async function summarizeHistory(messages, complete) {
     if (inputBytes(request) > 64000) throw new Error("旧历史过大，本次跳过摘要");
     const response = await complete({ model: MODEL, messages: request });
     console.log("[摘要用量]", response.usage ?? "供应商未返回");
-    if (response.usage) costTracker.record({
-        model: MODEL,
-        inputTokens: response.usage.prompt_tokens, outputTokens: response.usage.completion_tokens,
-        operation: "context_summary"
-    });
+    
     return response.choices[0]?.message?.content ?? "";
 }
 
@@ -135,21 +130,7 @@ export async function runAgentLoop(messages, onChunk, onToolCall, executeToolFn,
             }
 
             console.log('模型usage:', usage);
-            // 流结束后记录费用
-            if (usage) {
-                const cost = costTracker.record({
-                    model: MODEL,
-                    inputTokens: usage.prompt_tokens,
-                    outputTokens: usage.completion_tokens,
-                    sessionId: messages[0]?.sessionId,
-                    operation: "agent_loop"
-                });
-                logger.debug("API调用费用", {
-                    inputTokens: usage.prompt_tokens,
-                    outputTokens: usage.completion_tokens,
-                    cost: `¥${cost.totalCost.toFixed(6)}`
-                });
-            }
+            
             console.log("[本轮结束]", round, finishReason);
             await emit({ round, promptTokens: usage?.prompt_tokens ?? null });
             // ── 情况1：AI 要调工具 ────────────────────────────────────

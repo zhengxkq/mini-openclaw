@@ -12,7 +12,6 @@ import { executeTool } from "../agent/tools.js";
 import { runMultiAgent } from "../agent/orchestrator.js";
 import { shouldUseMultiAgent } from "../agent/loop.js";
 import { Tracer, generateTraceId } from "../observability/tracer.js";
-import { costTracker } from "../observability/cost-tracker.js";
 import { createLogger } from "../observability/logger.js";
 import { paths, ensureDataDirs } from "../config/paths.js";
 import { AgentRunError } from "../agent/run-policy.js";
@@ -275,16 +274,6 @@ export class Gateway {
                     type: "agent_reply",
                     content: reply
                 });
-
-                // ── 费用检查 ──────────────────────────────────────
-                const budget = costTracker.checkBudget(10);
-                if (budget.exceeded) {
-                    logger.warn("今日费用超预算", {
-                        current: `¥${budget.current.toFixed(4)}`,
-                        limit: `¥${budget.limit}`
-                    });
-                    sourceChannel?.send(msg.sessionId, "⚠️ 今日 API 费用已超预算，请联系管理员");
-                }
 
                 // ── 保存 Trace ────────────────────────────────────
                 tracer.endSpan(spanTotal, { success: true, replyLength: reply.length });
